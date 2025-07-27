@@ -7,7 +7,15 @@ You can build the individual projects using `go build`.
 ### Client CLI
 
 ```
-go build -ldflags "-X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'" -o ./pokemon ./pokemon
+VERSION=1.0.0; go build -ldflags "-X 'main.Version=$VERSION' -X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'" -o ./pokemon/version/$VERSION/pokemon ./pokemon
+```
+
+```
+VERSION=2.0.0; go build -ldflags "-X 'main.Version=$VERSION' -X 'main.AvailablePokemon=pikachu,raichu,charmander,charmeleon,squirtle,wartortle,bulbasaur,ivysaur'" -o ./pokemon/version/$VERSION/pokemon ./pokemon
+```
+
+```
+VERSION=3.0.0; go build -ldflags "-X 'main.Version=$VERSION' -X 'main.AvailablePokemon=pikachu,raichu,charmander,charmeleon,charizard,squirtle,wartortle,blastoise,bulbasaur,ivysaur,venusaur'" -o ./pokemon/version/$VERSION/pokemon ./pokemon
 ```
 
 ### Server
