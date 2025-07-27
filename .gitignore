@@ -1,0 +1,8 @@
+versions/
+version/
+pokemon-server
+!pokemon-server/
+pokemon
+!pokemon/
+server
+!server/
