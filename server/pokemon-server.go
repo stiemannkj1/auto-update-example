@@ -61,20 +61,21 @@ const POKEMON string = "pokemon"
 
 func main() {
 
+	var port uint64 = 8080
+
 	helpFlag := CliFlag{
 		Name:        "--help",
 		Short:       "-h",
 		Description: "Print this help message",
 	}
+	// TODO use config file instead
 	portFlag := CliFlag{
 		Name:        "--port",
 		Short:       "-p",
-		Description: "The port for the server to listen on",
+		Description: fmt.Sprintf("The port for the server to listen on (defaults to %d)", port),
 	}
 
 	flags := []CliFlag{helpFlag, portFlag}
-
-	var port uint64 = 8080
 
 	args := os.Args
 
@@ -113,6 +114,7 @@ func main() {
 	// Make this configurable to file
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
+	// TODO if more config is added or we need auth, add a DB to handle those cases
 	// TODO get from either file system or sql DB
 	versions := Versions{
 		All: []string{

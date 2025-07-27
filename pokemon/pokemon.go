@@ -63,8 +63,7 @@ const POKEMON_CLI_UPDATED string = "POKEMON_CLI_UPDATED"
 // Injected at build time:
 var Version string
 var AvailablePokemon string
-
-// End
+var UpdateUrl string
 
 func main() {
 
@@ -96,6 +95,10 @@ func main() {
 		panic("At least one Pokemon must be specified in the build via `-ldflags \"-X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'\"`")
 	}
 
+	if UpdateUrl == "" {
+		panic("Default UpdateUrl must be specified via in the build via `-ldflags \"-X 'main.UpdateUrl=https://localhost:8080/'\"`")
+	}
+
 	AvailablePokemon := strings.Split(AvailablePokemon, ",")
 
 	for i := 0; i < len(AvailablePokemon); i += 1 {
@@ -115,12 +118,14 @@ func main() {
 	updateUrlFlag := CliFlag{
 		Name:        "--update-url",
 		Short:       "-u",
-		Description: "(optional) The url to obtain updates from",
+		Description: fmt.Sprintf("(optional) The url to obtain updates from (https is required). Defaults to %s", UpdateUrl),
 	}
+	
+	var daemonIntervalSecs uint64 = 1
 	daemonFlag := CliFlag{
 		Name:        "--daemon",
 		Short:       "-d",
-		Description: "(optional) Run this executable in daemon mode outputting a Pokemon greeting on an interval. Configure the interval in seconds by specifying an optional positive integer",
+		Description: fmt.Sprintf("(optional) Run this executable in daemon mode outputting a Pokemon greeting on an interval. Configure the interval in seconds by specifying an optional positive integer. Defaults to %d second if interval is unspecified", daemonIntervalSecs),
 	}
 
 	flags := []CliFlag{helpFlag, versionFlag, updateUrlFlag, daemonFlag}
@@ -131,11 +136,9 @@ func main() {
 	var pokemon string
 	args := os.Args
 
-	var updateUrl string = "http://localhost:8080"
-
 	daemonRun := false
-	var daemonIntervalSecs uint64 = 1
 
+	// Avoid using `flag` package here since we need to customize our arg parsing code.
 	for i := 1; i < len(args); i += 1 {
 		switch args[i] {
 		case helpFlag.Name, helpFlag.Short:
@@ -149,9 +152,17 @@ func main() {
 		case updateUrlFlag.Name, updateUrlFlag.Short:
 			if i+1 < len(args) {
 				i += 1
-				updateUrl = args[i]
+				UpdateUrl = args[i]
 			} else {
 				fmt.Fprint(os.Stderr, "No value provided for --update-url\n")
+				printUsage(Version, flags, AvailablePokemon)
+				os.Exit(128)
+			}
+
+			// Require https for user supplied URLs.
+			// Allow non-https for the default URL for the sake of testing.
+			if !strings.HasPrefix(UpdateUrl, "https:") {
+				fmt.Fprintf(os.Stderr, "--update-url must use https: %s\n", UpdateUrl)
 				printUsage(Version, flags, AvailablePokemon)
 				os.Exit(128)
 			}
@@ -196,7 +207,7 @@ func main() {
 	update := func() {
 
 		fmt.Printf("Checking for updates...\n")
-		resp, err := http.Get(fmt.Sprintf("%s/versions/%s", updateUrl, POKEMON))
+		resp, err := http.Get(fmt.Sprintf("%s/versions/%s", UpdateUrl, POKEMON))
 
 		if err != nil {
 			// TODO log more details or send info back to server
@@ -229,7 +240,7 @@ func main() {
 
 		if err != nil && errors.Is(err, os.ErrNotExist) {
 
-			resp, err = http.Get(fmt.Sprintf("%s/downloads/%s?version=%s", updateUrl, POKEMON, version))
+			resp, err = http.Get(fmt.Sprintf("%s/downloads/%s?version=%s", UpdateUrl, POKEMON, version))
 
 			if err != nil {
 				// TODO log more details or send info back to server
@@ -284,7 +295,7 @@ func main() {
 			// Apply the new permissions
 			err = os.Chmod(updateFilePath, newMode)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Failed to install update: %v\nManually mark the file as executable and restart the process to update:\nchmod +x \"%s\"\n", err, updateFilePath)
 				return
 			}
 
@@ -295,6 +306,7 @@ func main() {
 				return
 			}
 
+			// TODO Exec doesn't exit, so I need to figure out what to do about defer calls
 			err = syscall.Exec(updateFilePath, newArgs(os.Args, updateFilePath), os.Environ())
 
 			if err != nil {
