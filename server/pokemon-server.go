@@ -57,6 +57,8 @@ func toSet(strings []string) map[string]struct{} {
 	return stringSet
 }
 
+const POKEMON string = "pokemon"
+
 func main() {
 
 	helpFlag := CliFlag{
@@ -108,8 +110,10 @@ func main() {
 		}
 	}
 
+	// Make this configurable to file
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
+	// TODO get from either file system or sql DB
 	versions := Versions{
 		All: []string{
 			"1.0.0",
@@ -135,7 +139,6 @@ func main() {
 	http.HandleFunc("/healthcheck", healthcheckHandler)
 
 	versionsHandler := func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(os.Stderr, r.URL.Path)
 		if r.Method != "GET" {
 			w.WriteHeader(http.StatusForbidden)
 		}
@@ -147,8 +150,7 @@ func main() {
 		w.Write(versions.Json)
 	}
 
-	http.HandleFunc("/versions", versionsHandler)
-	http.HandleFunc("/versions/", versionsHandler)
+	http.HandleFunc(fmt.Sprintf("/versions/%s", POKEMON), versionsHandler)
 
 	downloadHandler := func(w http.ResponseWriter, r *http.Request) {
 		version := r.URL.Query().Get("version")
@@ -172,13 +174,13 @@ func main() {
 			return
 		}
 
-		w.Header().Add("Content-Disposition", "attachment; filename=pokemon")
+		w.Header().Add("Content-Disposition", fmt.Sprintf("attachment; filename=pokemon-%s", version))
 		// TODO potentially cache the latest file in memory since it's the most likely to be requested.
 		// TODO read versions from config file or DB
 		http.ServeFile(w, r, fmt.Sprintf("/Volumes/Projects/stiemannkj1/auto-update-example/pokemon/version/%s/pokemon", version))
 	}
 
-	http.HandleFunc("/download/pokemon", downloadHandler)
+	http.HandleFunc(fmt.Sprintf("/downloads/%s", POKEMON), downloadHandler)
 
 	// TODO find new versions on the file system. Read versions dir from config file.
 	// TODO auth for new versions?
