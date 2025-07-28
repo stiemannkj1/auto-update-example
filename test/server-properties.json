@@ -1,0 +1,6 @@
+{
+    "Port": 8080,
+    "PokemonVersionDir": "./demo/version",
+    "VersionCheckIntervalSecs": 15,
+    "LogsLevel": "INFO"
+}

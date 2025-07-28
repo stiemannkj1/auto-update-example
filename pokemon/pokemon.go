@@ -28,6 +28,8 @@ const PokemonCliUpdatedName string = "POKEMON_CLI_UPDATED"
 // Injected at build time:
 var Version string
 var UpdateUrl string
+
+// TODO maybe change to embedded properties file
 var AvailablePokemon string
 
 // Prints CLI usage and available Pokemon.
@@ -207,7 +209,7 @@ func main() {
 
 	exePermissions := exeStat.Mode().Perm()
 
-	isPosix := false
+	isPosix := common.IsPosix()
 	switch runtime.GOOS {
 	case "linux", "darwin", "freebsd", "netbsd", "openbsd", "solaris":
 		isPosix = true
@@ -318,15 +320,6 @@ func main() {
 		}
 	}
 
-	randomPokemon := false
-
-	if pokemon == "" {
-		randomPokemon = true
-	} else if !slices.Contains(AvailablePokemon, pokemon) {
-		fmt.Fprintf(os.Stderr, "%s is not a supported Pokemon.\n", pokemon)
-		return
-	}
-
 	// Updates the CLI by:
 	// 1. Downloading and verifying the latest version.
 	// 2. Starting the new version.
@@ -396,6 +389,17 @@ func main() {
 		fmt.Printf("Successfully updated to %s\n", Version)
 	} else {
 		update()
+	}
+
+	// Update before validating pokemon in case the update supports a new
+	// pokemon.
+	randomPokemon := false
+
+	if pokemon == "" {
+		randomPokemon = true
+	} else if !slices.Contains(AvailablePokemon, pokemon) {
+		fmt.Fprintf(os.Stderr, "%s is not a supported Pokemon.\n", pokemon)
+		os.Exit(64)
 	}
 
 	// Background thread to update versions. This thread may be killed at any

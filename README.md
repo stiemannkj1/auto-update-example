@@ -64,6 +64,14 @@ To run:
 ./pokemon/pokemon -d
 ```
 
+## Testing
+
+Run the end-to-end tests:
+
+```
+go build -o ./e2e ./test && ./e2e
+```
+
 ## Format
 
 To format all `.go` files:

@@ -9,8 +9,18 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime"
 	"strings"
 )
+
+func IsPosix() bool {
+	switch runtime.GOOS {
+	case "linux", "darwin", "freebsd", "netbsd", "openbsd", "solaris":
+		return true
+	default:
+		return false
+	}
+}
 
 const Sha512Name string = "Sha-512"
 
