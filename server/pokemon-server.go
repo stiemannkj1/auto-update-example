@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/stiemannkj1/auto-update-example/common"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,32 +19,7 @@ import (
 	"time"
 )
 
-type Versions struct {
-	All []string `json:"versions"`
-}
-
-type CliFlag struct {
-	Name        string
-	Short       string
-	Description string
-}
-
-func toSlogLevel(levelStr string) (slog.Level, error) {
-	switch strings.ToUpper(levelStr) {
-	case "DEBUG":
-		return slog.LevelDebug, nil
-	case "INFO":
-		return slog.LevelInfo, nil
-	case "WARN":
-		return slog.LevelWarn, nil
-	case "ERROR":
-		return slog.LevelError, nil
-	default:
-		return 0, fmt.Errorf("unknown slog level: %s", levelStr)
-	}
-}
-
-func printUsage(flags []CliFlag) {
+func printUsage(flags []common.CliFlag) {
 	fmt.Fprintf(os.Stderr, "Usage: server\n\tStart a server that serves versions of the pokemon cli tool\n")
 
 	for _, flag := range flags {
@@ -60,7 +36,7 @@ type Settings struct {
 }
 
 type VersionsCache struct {
-	Versions Versions
+	Versions common.Versions
 	Json     []byte
 	Set      map[string]bool
 	Lock     sync.RWMutex
@@ -143,7 +119,7 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 		return false, nil
 	}
 
-	allVersions := Versions{
+	allVersions := common.Versions{
 		All: availableVersions,
 	}
 	versionsJson, err := json.Marshal(&allVersions)
@@ -177,7 +153,7 @@ var version *regexp.Regexp = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]$`)
 
 func main() {
 
-	helpFlag := CliFlag{
+	helpFlag := common.CliFlag{
 		Name:        "--help",
 		Short:       "-h",
 		Description: "Print this help message",
@@ -195,13 +171,13 @@ func main() {
 		panic(fmt.Sprintf("Failed to build default %s JSON", reflect.TypeOf(emptySettings).Name()))
 	}
 
-	settingsFlag := CliFlag{
+	settingsFlag := common.CliFlag{
 		Name:        "--settings",
 		Short:       "-s",
 		Description: fmt.Sprintf("The JSON settings file for the server. You can configure the following settings in this file:\n\t%s", settingsJson),
 	}
 
-	flags := []CliFlag{helpFlag, settingsFlag}
+	flags := []common.CliFlag{helpFlag, settingsFlag}
 
 	var settings Settings
 
@@ -266,7 +242,7 @@ func main() {
 		logWriter = bufio.NewWriterSize(logFile, 512)
 	}
 
-	level, err := toSlogLevel(strings.ToUpper(settings.LogsLevel))
+	level, err := common.ToSlogLevel(settings.LogsLevel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid log level: \"%s\". Defaulting to INFO.\n", settings.LogsLevel)
 		level = slog.LevelInfo

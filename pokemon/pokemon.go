@@ -2,8 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
+	// "errors"
 	"fmt"
+	"github.com/stiemannkj1/auto-update-example/common"
 	"io"
 	"math/rand"
 	"net/http"
@@ -18,13 +19,7 @@ import (
 	"time"
 )
 
-type CliFlag struct {
-	Name        string
-	Short       string
-	Description string
-}
-
-func printUsage(version string, flags []CliFlag, availablePokemon []string) {
+func printUsage(version string, flags []common.CliFlag, availablePokemon []string) {
 	fmt.Fprintf(os.Stderr, "Print a greeting from your favorite Pokemon.\nUsage: pokemon [(optional) Pokemon name]\n\n")
 
 	for _, flag := range flags {
@@ -57,8 +52,8 @@ func newArgs(oldArgs []string, newExe string) []string {
 	return newArgs
 }
 
-const POKEMON string = "pokemon"
-const POKEMON_CLI_UPDATED string = "POKEMON_CLI_UPDATED"
+const Pokemon string = "pokemon"
+const PokemonCliUpdatedName string = "POKEMON_CLI_UPDATED"
 
 // Injected at build time:
 var Version string
@@ -105,30 +100,30 @@ func main() {
 		AvailablePokemon[i] = strings.ToLower(strings.TrimSpace(AvailablePokemon[i]))
 	}
 
-	helpFlag := CliFlag{
+	helpFlag := common.CliFlag{
 		Name:        "--help",
 		Short:       "-h",
 		Description: "Print this help message",
 	}
-	versionFlag := CliFlag{
+	versionFlag := common.CliFlag{
 		Name:        "--version",
 		Short:       "-v",
 		Description: "Print the version of this cli tool",
 	}
-	updateUrlFlag := CliFlag{
+	updateUrlFlag := common.CliFlag{
 		Name:        "--update-url",
 		Short:       "-u",
 		Description: fmt.Sprintf("(optional) The url to obtain updates from (https is required). Defaults to %s", UpdateUrl),
 	}
-	
+
 	var daemonIntervalSecs uint64 = 1
-	daemonFlag := CliFlag{
+	daemonFlag := common.CliFlag{
 		Name:        "--daemon",
 		Short:       "-d",
-		Description: fmt.Sprintf("(optional) Run this executable in daemon mode outputting a Pokemon greeting on an interval. Configure the interval in seconds by specifying an optional positive integer. Defaults to %d second if interval is unspecified", daemonIntervalSecs),
+		Description: fmt.Sprintf("(optional) Run this executable in daemon mode outputting a Pokemon greeting on an interval. Configure the interval in seconds by specifying an optional positive integer. Defaults to %d second(s) if interval is unspecified", daemonIntervalSecs),
 	}
 
-	flags := []CliFlag{helpFlag, versionFlag, updateUrlFlag, daemonFlag}
+	flags := []common.CliFlag{helpFlag, versionFlag, updateUrlFlag, daemonFlag}
 
 	// TODO check for updates on startup.
 	// TODO add flag to ignore updates on startup.
@@ -143,11 +138,9 @@ func main() {
 		switch args[i] {
 		case helpFlag.Name, helpFlag.Short:
 			printUsage(Version, flags, AvailablePokemon)
-			os.Exit(0)
 			return
 		case versionFlag.Name, versionFlag.Short:
 			fmt.Fprintf(os.Stderr, "%s\n", Version)
-			os.Exit(0)
 			return
 		case updateUrlFlag.Name, updateUrlFlag.Short:
 			if i+1 < len(args) {
@@ -156,7 +149,7 @@ func main() {
 			} else {
 				fmt.Fprint(os.Stderr, "No value provided for --update-url\n")
 				printUsage(Version, flags, AvailablePokemon)
-				os.Exit(128)
+				os.Exit(64)
 			}
 
 			// Require https for user supplied URLs.
@@ -164,7 +157,7 @@ func main() {
 			if !strings.HasPrefix(UpdateUrl, "https:") {
 				fmt.Fprintf(os.Stderr, "--update-url must use https: %s\n", UpdateUrl)
 				printUsage(Version, flags, AvailablePokemon)
-				os.Exit(128)
+				os.Exit(64)
 			}
 		case daemonFlag.Name, daemonFlag.Short:
 			daemonRun = true
@@ -184,7 +177,7 @@ func main() {
 			if len(args[i]) == 0 || args[i][0] == '-' {
 				fmt.Fprintf(os.Stderr, "Invalid flag: \"%s\"\n", args[i])
 				printUsage(Version, flags, AvailablePokemon)
-				os.Exit(128)
+				os.Exit(64)
 			} else {
 				pokemon = strings.ToLower(args[i])
 			}
@@ -207,7 +200,7 @@ func main() {
 	update := func() {
 
 		fmt.Printf("Checking for updates...\n")
-		resp, err := http.Get(fmt.Sprintf("%s/versions/%s", UpdateUrl, POKEMON))
+		resp, err := http.Get(fmt.Sprintf("%s/versions/%s", UpdateUrl, Pokemon))
 
 		if err != nil {
 			// TODO log more details or send info back to server
@@ -235,12 +228,12 @@ func main() {
 			return
 		}
 
-		updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", POKEMON, version))
+		updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
 		updateFile, err := os.Open(updateFilePath)
 
-		if err != nil && errors.Is(err, os.ErrNotExist) {
+		if err != nil && os.IsNotExist(err) {
 
-			resp, err = http.Get(fmt.Sprintf("%s/downloads/%s?version=%s", UpdateUrl, POKEMON, version))
+			resp, err = http.Get(fmt.Sprintf("%s/downloads/%s?version=%s", UpdateUrl, Pokemon, version))
 
 			if err != nil {
 				// TODO log more details or send info back to server
@@ -294,18 +287,20 @@ func main() {
 
 			// Apply the new permissions
 			err = os.Chmod(updateFilePath, newMode)
+
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to install update: %v\nManually mark the file as executable and restart the process to update:\nchmod +x \"%s\"\n", err, updateFilePath)
 				return
 			}
 
-			err = os.Setenv(POKEMON_CLI_UPDATED, "TRUE")
+			err = os.Setenv(PokemonCliUpdatedName, "TRUE")
 
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
 				return
 			}
 
+			// If the cli ever needs to clean up resources, we may need to force forking another process instead. For now, we reuse the existing process for a seamless upgrade that keeps the existing PID.
 			// TODO Exec doesn't exit, so I need to figure out what to do about defer calls
 			err = syscall.Exec(updateFilePath, newArgs(os.Args, updateFilePath), os.Environ())
 
@@ -316,7 +311,7 @@ func main() {
 			}
 		}
 
-		err = os.Setenv(POKEMON_CLI_UPDATED, "TRUE")
+		err = os.Setenv(PokemonCliUpdatedName, "TRUE")
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
@@ -324,18 +319,19 @@ func main() {
 		}
 
 		cmd := exec.Command(updateFilePath, newArgs(os.Args, updateFilePath)...)
-		err = cmd.Run()
+		err = cmd.Start()
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start updated version: %v\n", err)
 			return
 		} else {
+			fmt.Fprintf(os.Stderr, "Started updated version: %s. Shutting down %s.\n", version, Version)
 			os.Exit(0)
 		}
 	}
 
-	if os.Getenv(POKEMON_CLI_UPDATED) == "TRUE" {
-		_ = os.Unsetenv(POKEMON_CLI_UPDATED)
+	if os.Getenv(PokemonCliUpdatedName) == "TRUE" {
+		_ = os.Unsetenv(PokemonCliUpdatedName)
 		fmt.Printf("Successfully updated to %s\n", Version)
 	} else {
 		update()
