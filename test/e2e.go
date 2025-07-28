@@ -17,7 +17,7 @@ import (
 
 // runCommand executes an external command, captures its stdout and stderr,
 // and panics if the command execution fails.
-func runCommand(timeoutSecs int64, name string, args ...string) (stdout, stderr string) {
+func runCommand(timeoutSecs int64, env []string, name string, args ...string) (stdout, stderr string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSecs)*time.Second)
 	defer cancel()
 
@@ -26,6 +26,7 @@ func runCommand(timeoutSecs int64, name string, args ...string) (stdout, stderr 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
+	cmd.Env = env
 
 	err := cmd.Run()
 	stdout = stdoutBuf.String()
@@ -39,12 +40,13 @@ func runCommand(timeoutSecs int64, name string, args ...string) (stdout, stderr 
 	return stdout, stderr
 }
 
-func startCommand(name string, args ...string) *exec.Cmd {
+func startCommand(env []string, name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
+	cmd.Env = env
 
 	err := cmd.Start()
 
@@ -121,10 +123,11 @@ func main() {
 	}
 
 	// Build CLI v1.0.0
-	var timeoutSecs int64 = 15
+	var timeoutSecs int64 = 60
 	var _ any
 	_, _ = runCommand(
 		timeoutSecs,
+		nil,
 		"go",
 		"build",
 		"-ldflags",
@@ -144,6 +147,7 @@ func main() {
 	// Build CLI v2.0.0
 	_, _ = runCommand(
 		timeoutSecs,
+		nil,
 		"go",
 		"build",
 		"-ldflags",
@@ -154,10 +158,10 @@ func main() {
 	)
 
 	// Build the server.
-	_, _ = runCommand(timeoutSecs, "go", "build", "-o", "./test/demo/server", "./server")
+	_, _ = runCommand(timeoutSecs, nil, "go", "build", "-o", "./test/demo/server", "./server")
 
 	// Run the server.
-	cmd := startCommand("./test/demo/server", "--settings", "test/server-properties.json")
+	cmd := startCommand([]string{}, "./test/demo/server", "--settings", "test/server-properties.json")
 	defer cmd.Process.Kill()
 
 	// Wait for the server to start.
@@ -181,7 +185,8 @@ func main() {
 
 	// Attempt to run CLI v1.0.0 with a pokemon from v2.0.0. If the command
 	// fails, the fail the test.
-	stdout, stderr := runCommand(timeoutSecs, "test/demo/pokemon", "raichu")
+	stdout, stderr := runCommand(timeoutSecs, []string{}, "test/demo/pokemon", "raichu")
+	// TODO this fails in docker even though a manual test runs correctly.
 
 	// If stdout doesn't show a greeting from raichu, fail the test.
 	if !strings.Contains(strings.ToLower(stdout), "raichu") {

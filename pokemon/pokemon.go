@@ -43,7 +43,7 @@ func printUsage(version string, flags []common.CliFlag, availablePokemon []strin
 	fmt.Fprintf(os.Stderr, "\nSupported Pokemon:\n\n")
 
 	for _, pokemon := range availablePokemon {
-		fmt.Fprintf(os.Stderr, "\t- %s%s\n", strings.ToUpper(pokemon[0:1]), pokemon[1:])
+		fmt.Fprintf(os.Stderr, "\t- %s\n", common.Capitalize(pokemon))
 	}
 
 	fmt.Fprintf(os.Stderr, "\nVersion: %s\n", version)
@@ -398,7 +398,7 @@ func main() {
 	if pokemon == "" {
 		randomPokemon = true
 	} else if !slices.Contains(AvailablePokemon, pokemon) {
-		fmt.Fprintf(os.Stderr, "%s is not a supported Pokemon.\n", pokemon)
+		fmt.Fprintf(os.Stderr, "%s is not a supported Pokemon.\n", common.Capitalize(pokemon))
 		os.Exit(64)
 	}
 
@@ -419,7 +419,7 @@ func main() {
 			pokemon = AvailablePokemon[rand.Intn(len(AvailablePokemon))]
 		}
 
-		fmt.Printf("%s%s says, \"Hi!\".\n", strings.ToUpper(pokemon[0:1]), pokemon[1:])
+		fmt.Printf("%s says, \"Hi!\".\n", common.Capitalize(pokemon))
 
 		if !daemonRun {
 			return

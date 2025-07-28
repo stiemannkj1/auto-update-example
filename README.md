@@ -72,6 +72,15 @@ Run the end-to-end tests:
 go build -o ./e2e ./test && ./e2e
 ```
 
+Or with docker:
+
+```
+docker run --rm --volume="$PWD:/auto-update-example/" golang:1.24-alpine sh -c "cd /auto-update-example/ && go build -o ./e2e ./test && ./e2e"
+```
+
+TODO Fix e2e.go to work correctly on docker. The manual test passes in docker,
+and the network is correct so it's unclear what the problem is.
+
 ## Format
 
 To format all `.go` files:
@@ -87,7 +96,9 @@ To see the auto-update functionality in action:
 1. Build 2 versions of the CLI:
 
     ```
+    rm -r demo/ pokemon/version/
     VERSION=1.0.0; go build -ldflags "-X 'main.Version=$VERSION' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'" -o ./pokemon/version/$VERSION/pokemon ./pokemon
+    mkdir demo/ && cp ./pokemon/version/$VERSION/pokemon ./demo/pokemon
     VERSION=2.0.0; go build -ldflags "-X 'main.Version=$VERSION' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,raichu,charmander,charmeleon,squirtle,wartortle,bulbasaur,ivysaur'" -o ./pokemon/version/$VERSION/pokemon ./pokemon
     ```
 
@@ -98,10 +109,10 @@ To see the auto-update functionality in action:
         ./server/server --settings server/server-properties.json
     ```
 
-3. Start the CLI:
+3. In another terminal, start the CLI:
 
     ```
-    ./pokemon/pokemon --daemon
+    ./demo/pokemon --daemon
     ```
 
     The CLI should automatically update to version `2.0.0` at startup:
@@ -119,7 +130,9 @@ To see the auto-update functionality in action:
     Checking for updates...
     ```
 
-4. Build version 3.0.0 of the CLI:
+    You'll see v2.0.0 Pokemon greetings like Raichu, Wartortle, Ivysaur, and Charmeleon.
+
+4. In another terminal, build version 3.0.0 of the CLI:
 
     ```
     VERSION=3.0.0; go build -ldflags "-X 'main.Version=$VERSION' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,raichu,charmander,charmeleon,charizard,squirtle,wartortle,blastoise,bulbasaur,ivysaur,venusaur'" -o ./pokemon/version/$VERSION/pokemon ./pokemon
@@ -143,6 +156,8 @@ To see the auto-update functionality in action:
     Wartortle says, "Hi!".
     ```
 
+    After the update, you'll see v3.0.0 Pokemon greetings like Blastoise, Venusaur, and Charizard.
+
 ## Alternatives
 
 Another approach to this problem would be to simply send down a JSON blob of
@@ -155,3 +170,7 @@ that would require a full database and authentication scheme. The current
 approach is simpler and could work from a build pipeline with SSH access to the
 server. So SSH authentication and server filesystem permissions could be used in
 lieu of server functionality.
+
+The server could also have used gRPC rather than HTTP/JSON for communication, but
+JSON/HTTP is easier to debug and works with a browser as well. It works well
+for this simple case.

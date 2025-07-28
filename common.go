@@ -13,6 +13,8 @@ import (
 	"strings"
 )
 
+const Sha512Name string = "Sha-512"
+
 func IsPosix() bool {
 	switch runtime.GOOS {
 	case "linux", "darwin", "freebsd", "netbsd", "openbsd", "solaris":
@@ -22,7 +24,13 @@ func IsPosix() bool {
 	}
 }
 
-const Sha512Name string = "Sha-512"
+func Capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+
+	return fmt.Sprintf("%s%s", strings.ToUpper(s[0:1]), s[1:])
+}
 
 // Version data used to communicate between client and server
 type Versions struct {
