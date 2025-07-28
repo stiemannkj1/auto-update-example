@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -230,6 +230,7 @@ func main() {
 	flags := []common.CliFlag{helpFlag, settingsFlag}
 
 	var settings Settings
+	var settingsDir string
 
 	args := os.Args
 
@@ -245,12 +246,30 @@ func main() {
 			}
 
 			i += 1
-			err := readJsonFile(args[i], 1*MB, &settings)
+			settingsPath, err := filepath.Abs(args[i])
 
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Unable to open settings file \"%s\":\n%v\n\n", args[i], err)
+				fmt.Fprintf(os.Stderr, "Unable to find settings file \"%s\":\n%v\n\n", args[i], err)
 				printUsage(flags)
 				os.Exit(64)
+			}
+
+			err = readJsonFile(settingsPath, 1*MB, &settings)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Unable to open settings file \"%s\":\n%v\n\n", settingsPath, err)
+				printUsage(flags)
+				os.Exit(64)
+			}
+
+			settingsDir = filepath.Dir(settingsPath)
+
+			if settings.LogsDir != "" && !filepath.IsAbs(settings.LogsDir) {
+				settings.LogsDir = filepath.Join(settingsDir, settings.LogsDir)
+			}
+
+			if !filepath.IsAbs(settings.PokemonVersionDir) {
+				settings.PokemonVersionDir = filepath.Join(settingsDir, settings.PokemonVersionDir)
 			}
 		default:
 			if len(args[i]) == 0 || args[i][0] == '-' {
