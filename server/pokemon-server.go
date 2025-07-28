@@ -1,3 +1,5 @@
+// Server which exposes CLI executable binaries for download. The server
+// watches the filesystem to find new versions of the CLI tool.
 package main
 
 import (
@@ -12,7 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"slices"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -28,14 +30,32 @@ func printUsage(flags []common.CliFlag) {
 	}
 }
 
+// Server settings which can be configured via JSON file
 type Settings struct {
-	Port                     uint16
-	PokemonVersionDir        string
+	// The port for the server to listen on
+	Port uint16
+	// The directory containing the versions of executables available for download
+	// .
+	// ├── 1.0.0/
+	// │     └── pokemon
+	// |
+	// ├── 2.0.0/
+	// │     └──  pokemon
+	// |
+	// └── 3.0.0/
+	//       └──  pokemon
+	PokemonVersionDir string
+	// The interval in seconds to wait before checking for new versions
 	VersionCheckIntervalSecs uint64
-	LogsDir                  string
-	LogsLevel                string
+	// The directory where logs files should be written. If empty, logs will be written to os.Stderr
+	LogsDir string
+	// The log level
+	LogsLevel string
 }
 
+// Cache of version data to avoid unnecessary allocations and recalculations
+// Use the Lock when reading and writing data otherwise access will not be
+// thread-safe.
 type VersionsCache struct {
 	Versions           common.Versions
 	Json               []byte
@@ -43,6 +63,7 @@ type VersionsCache struct {
 	Lock               sync.RWMutex
 }
 
+// Gets the Sha-512 hash for a particular version
 func getSha512(versions *VersionsCache, version string) string {
 	versions.Lock.RLock()
 	defer versions.Lock.RUnlock()
@@ -60,6 +81,8 @@ type VersionMessage struct {
 	Version string `json:"version"`
 }
 
+// Reads a Json file into the provided value object. If the file is larger than
+// maxSize, this method returns an error and the value struct is invalid
 func readJsonFile[T any](filePath string, maxSize int64, value *T) error {
 
 	file, err := os.Open(filePath)
@@ -80,6 +103,22 @@ func readJsonFile[T any](filePath string, maxSize int64, value *T) error {
 	return nil
 }
 
+// Searches the filesystem for versions under settings.PokemonVersionsDir with
+// the structure:
+// .
+// ├── 1.0.0/
+// │     └── pokemon
+// |
+// ├── 2.0.0/
+// │     └──  pokemon
+// |
+// └── 3.0.0/
+//
+//	└──  pokemon
+//
+// If the versions found are different than the previous version, this method
+// updates the cache with the latest version information. Returns true if the
+// cache was updated.
 func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsCache) (updated bool, err error) {
 	entries, err := os.ReadDir(settings.PokemonVersionDir)
 
@@ -124,7 +163,7 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 		availableVersions = append(availableVersions, possibleVersion)
 	}
 
-	if slices.Equal(availableVersions, versions.Versions.All) {
+	if maps.Equal(versionToSha512Map, versions.VersionToSha512Map) {
 		return false, nil
 	}
 
@@ -141,6 +180,7 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 		return false, err
 	}
 
+	// Minimal write locking here to replace the old values.
 	versions.Lock.Lock()
 	defer versions.Lock.Unlock()
 
@@ -162,22 +202,23 @@ var VersionRegex *regexp.Regexp = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]$`)
 
 func main() {
 
+	// Define CLI args:
 	helpFlag := common.CliFlag{
 		Name:        "--help",
 		Short:       "-h",
 		Description: "Print this help message",
 	}
 
-	emptySettings := Settings{
+	exampleSettings := Settings{
 		Port:                     1234,
 		PokemonVersionDir:        "/path/to/pokemon/versions/dir",
 		VersionCheckIntervalSecs: 15,
 		LogsDir:                  "/path/to/logs/dir",
 		LogsLevel:                "WARN",
 	}
-	settingsJson, err := json.MarshalIndent(&emptySettings, "\t", "\t")
+	settingsJson, err := json.MarshalIndent(&exampleSettings, "\t", "\t")
 	if err != nil {
-		panic(fmt.Sprintf("Failed to build default %s JSON", reflect.TypeOf(emptySettings).Name()))
+		panic(fmt.Sprintf("Failed to build default %s JSON", reflect.TypeOf(exampleSettings).Name()))
 	}
 
 	settingsFlag := common.CliFlag{
@@ -192,6 +233,7 @@ func main() {
 
 	args := os.Args
 
+	// Parse CLI Args:
 	for i := 1; i < len(args); i += 1 {
 		switch args[i] {
 		case helpFlag.Name, helpFlag.Short:
@@ -225,6 +267,7 @@ func main() {
 		os.Exit(64)
 	}
 
+	// Initialize Logger.
 	var logWriter io.Writer
 
 	if settings.LogsDir == "" {
@@ -248,7 +291,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		logWriter = bufio.NewWriterSize(logFile, 512)
+		logWriter = bufio.NewWriter(logFile)
 	}
 
 	level, err := common.ToSlogLevel(settings.LogsLevel)
@@ -260,6 +303,8 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{
 		Level: level,
 	}))
+
+	// Find CLI versions:
 	versions := VersionsCache{}
 
 	updated, err := updateVersions(logger, &settings, &versions)
@@ -269,9 +314,10 @@ func main() {
 		printUsage(flags)
 		os.Exit(1)
 	} else if logger.Enabled(context.Background(), slog.LevelInfo) {
-		logger.Info(fmt.Sprintf("Updated versions. Found [%s]", strings.Join(versions.Versions.All, ",")))
+		logger.Info(fmt.Sprintf("Updated versions. Found: [%s]", strings.Join(versions.Versions.All, ",")))
 	}
 
+	// Initialize Endpoints:
 	healthcheckHandler := func(w http.ResponseWriter, r *http.Request) {
 
 		logRequest(logger, r)
@@ -288,6 +334,8 @@ func main() {
 	http.HandleFunc("/ping", healthcheckHandler)
 	http.HandleFunc("/healthcheck", healthcheckHandler)
 
+	// Versions enpoint that publishes the versions of the CLI tool which can
+	// be downloaded:
 	http.HandleFunc(fmt.Sprintf("/versions/%s", Pokemon), func(w http.ResponseWriter, r *http.Request) {
 
 		logRequest(logger, r)
@@ -303,6 +351,7 @@ func main() {
 		w.Write(versions.Json)
 	})
 
+	// Download endpoint which serves the CLI executable binary:
 	http.HandleFunc(fmt.Sprintf("/downloads/%s", Pokemon), func(w http.ResponseWriter, r *http.Request) {
 
 		logRequest(logger, r)

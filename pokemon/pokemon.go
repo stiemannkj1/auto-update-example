@@ -1,3 +1,4 @@
+// CLI tool which shows greetings from various pokemon.
 package main
 
 import (
@@ -26,9 +27,10 @@ const PokemonCliUpdatedName string = "POKEMON_CLI_UPDATED"
 
 // Injected at build time:
 var Version string
-var AvailablePokemon string
 var UpdateUrl string
+var AvailablePokemon string
 
+// Prints CLI usage and available Pokemon.
 func printUsage(version string, flags []common.CliFlag, availablePokemon []string) {
 	fmt.Fprintf(os.Stderr, "Print a greeting from your favorite Pokemon.\nUsage: pokemon [(optional) Pokemon name]\n\n")
 
@@ -45,6 +47,8 @@ func printUsage(version string, flags []common.CliFlag, availablePokemon []strin
 	fmt.Fprintf(os.Stderr, "\nVersion: %s\n", version)
 }
 
+// Copies old CLI args to a new array and changes the 0th arg to point to a new
+// executable path.
 func newArgs(oldArgs []string, newExe string) []string {
 
 	if len(oldArgs) == 0 {
@@ -62,6 +66,7 @@ func newArgs(oldArgs []string, newExe string) []string {
 	return newArgs
 }
 
+// Gets the latest available version from the server.
 func getLatestVersion(updateUrl string) (string, error) {
 
 	resp, err := http.Get(fmt.Sprintf("%s/versions/%s", updateUrl, Pokemon))
@@ -81,8 +86,11 @@ func getLatestVersion(updateUrl string) (string, error) {
 	return versions.All[len(versions.All)-1], nil
 }
 
+// Downloads the specified version of the tool if it doesn't already exist on
+// the filesystem.
 func downloadUpdateVersion(exeDir string, updateUrl string, version string, permissions fs.FileMode) (string, error) {
 
+	// TODO handle file name collisions.
 	updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
 	updateFile, err := os.Open(updateFilePath)
 	alreadyExists := err == nil
@@ -97,6 +105,7 @@ func downloadUpdateVersion(exeDir string, updateUrl string, version string, perm
 		return "", err
 	}
 
+	// Validate the file if it has already been downloaded.
 	if alreadyExists {
 
 		sha512, err := common.Sha512Hash(updateFile)
@@ -157,6 +166,26 @@ func downloadUpdateVersion(exeDir string, updateUrl string, version string, perm
 
 func main() {
 
+	// Validate that the tool was built with the correct flags:
+	if Version == "" {
+		panic("Version must be specified in the build via `-ldflags \"-X 'main.Version=1.0.0'\"`")
+	}
+
+	if UpdateUrl == "" {
+		panic("Default UpdateUrl must be specified via in the build via `-ldflags \"-X 'main.UpdateUrl=https://localhost:8080/'\"`")
+	}
+
+	if AvailablePokemon == "" {
+		panic("At least one Pokemon must be specified in the build via `-ldflags \"-X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'\"`")
+	}
+
+	AvailablePokemon := strings.Split(AvailablePokemon, ",")
+
+	for i := 0; i < len(AvailablePokemon); i += 1 {
+		AvailablePokemon[i] = strings.ToLower(strings.TrimSpace(AvailablePokemon[i]))
+	}
+
+	// Get the current executable, its metadata, and its parent:
 	exe, err := os.Executable()
 
 	if err != nil {
@@ -182,24 +211,6 @@ func main() {
 	switch runtime.GOOS {
 	case "linux", "darwin", "freebsd", "netbsd", "openbsd", "solaris":
 		isPosix = true
-	}
-
-	if Version == "" {
-		panic("Version must be specified in the build via `-ldflags \"-X 'main.Version=1.0.0'\"`")
-	}
-
-	if AvailablePokemon == "" {
-		panic("At least one Pokemon must be specified in the build via `-ldflags \"-X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'\"`")
-	}
-
-	if UpdateUrl == "" {
-		panic("Default UpdateUrl must be specified via in the build via `-ldflags \"-X 'main.UpdateUrl=https://localhost:8080/'\"`")
-	}
-
-	AvailablePokemon := strings.Split(AvailablePokemon, ",")
-
-	for i := 0; i < len(AvailablePokemon); i += 1 {
-		AvailablePokemon[i] = strings.ToLower(strings.TrimSpace(AvailablePokemon[i]))
 	}
 
 	helpFlag := common.CliFlag{
@@ -234,15 +245,13 @@ func main() {
 
 	flags := []common.CliFlag{helpFlag, versionFlag, updateUrlFlag, daemonFlag, updateIntervalFlag}
 
-	// TODO check for updates on startup.
-	// TODO add flag to ignore updates on startup.
-
 	var pokemon string
 	args := os.Args
 
 	daemonRun := false
 
 	// Avoid using `flag` package here since we need to customize our arg parsing code.
+	// Parse CLI args:``
 	for i := 1; i < len(args); i += 1 {
 		switch args[i] {
 		case helpFlag.Name, helpFlag.Short:
@@ -318,6 +327,10 @@ func main() {
 		return
 	}
 
+	// Updates the CLI by:
+	// 1. Downloading and verifying the latest version.
+	// 2. Starting the new version.
+	// 3. Shutting down the current version.
 	update := func() {
 
 		fmt.Printf("Checking for updates...\n")
@@ -345,7 +358,7 @@ func main() {
 		err = os.Setenv(PokemonCliUpdatedName, "TRUE")
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to set up for update: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Failed to set up env for update: %v\n", err)
 			return
 		}
 
@@ -354,7 +367,7 @@ func main() {
 			// On Posix, reuse the existing process via exec for a seamless upgrade
 			// that keeps the existing PID.
 			//
-			// If the cli ever needs to clean up resources, we may need to force
+			// If the CLI ever needs to clean up resources, we may need to force
 			// forking another process instead.
 			err = syscall.Exec(updateFilePath, newArgs(os.Args, updateFilePath), os.Environ())
 
@@ -378,6 +391,7 @@ func main() {
 	}
 
 	if os.Getenv(PokemonCliUpdatedName) == "TRUE" {
+		// Skip update if we already know we just updated.
 		_ = os.Unsetenv(PokemonCliUpdatedName)
 		fmt.Printf("Successfully updated to %s\n", Version)
 	} else {
@@ -390,13 +404,13 @@ func main() {
 	go func() {
 		for {
 			time.Sleep(time.Duration(updateCheckIntervalSecs) * time.Second)
-			
+
 			update()
 		}
 	}()
 
+	// Print greeting:
 	for {
-
 		if randomPokemon {
 			pokemon = AvailablePokemon[rand.Intn(len(AvailablePokemon))]
 		}

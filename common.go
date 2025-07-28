@@ -1,3 +1,4 @@
+// Common utilities shared between the Pokemon CLI and server
 package common
 
 import (
@@ -13,12 +14,15 @@ import (
 
 const Sha512Name string = "Sha-512"
 
+// Version data used to communicate between client and server
 type Versions struct {
 	All []string `json:"versions"`
 }
 
 type CliFlag struct {
-	Name        string
+	// Long flag for the CLI arg such as "--switch"
+	Name string
+	// Short flag for the CLI arg such as "-s"
 	Short       string
 	Description string
 }
@@ -43,6 +47,7 @@ func ToHexHash(hasher *hash.Hash) string {
 	return hex.EncodeToString(hash)
 }
 
+// Obtain the Sha-512 hash of a file as a hexedecimal string
 func Sha512Hash(file *os.File) (string, error) {
 
 	hasher := sha512.New()
