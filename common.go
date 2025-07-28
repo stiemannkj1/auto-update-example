@@ -1,10 +1,17 @@
 package common
 
 import (
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
+	"hash"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 )
+
+const Sha512Name string = "Sha-512"
 
 type Versions struct {
 	All []string `json:"versions"`
@@ -29,4 +36,24 @@ func ToSlogLevel(levelStr string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("unknown slog level: %s", levelStr)
 	}
+}
+
+func ToHexHash(hasher *hash.Hash) string {
+	hash := (*hasher).Sum(make([]byte, 0, 64))
+	return hex.EncodeToString(hash)
+}
+
+func Sha512Hash(file *os.File) (string, error) {
+
+	hasher := sha512.New()
+
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+
+	return ToHexHash(&hasher), nil
+}
+
+func NewSha512Error(path string, expectedSha512 string, sha512 string) error {
+	return fmt.Errorf("expected file %s to have Sha-512 %s, but found %s", path, expectedSha512, sha512)
 }

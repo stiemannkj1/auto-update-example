@@ -33,3 +33,9 @@ To format all `.go` files:
 ```
 gofmt -s -w .
 ```
+
+## Run
+
+### Server
+
+

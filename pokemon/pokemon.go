@@ -1,11 +1,11 @@
 package main
 
 import (
+	"crypto/sha512"
 	"encoding/json"
-	// "errors"
 	"fmt"
-	"github.com/stiemannkj1/auto-update-example/common"
 	"io"
+	"io/fs"
 	"math/rand"
 	"net/http"
 	"os"
@@ -17,7 +17,17 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/stiemannkj1/auto-update-example/common"
 )
+
+const Pokemon string = "pokemon"
+const PokemonCliUpdatedName string = "POKEMON_CLI_UPDATED"
+
+// Injected at build time:
+var Version string
+var AvailablePokemon string
+var UpdateUrl string
 
 func printUsage(version string, flags []common.CliFlag, availablePokemon []string) {
 	fmt.Fprintf(os.Stderr, "Print a greeting from your favorite Pokemon.\nUsage: pokemon [(optional) Pokemon name]\n\n")
@@ -52,13 +62,98 @@ func newArgs(oldArgs []string, newExe string) []string {
 	return newArgs
 }
 
-const Pokemon string = "pokemon"
-const PokemonCliUpdatedName string = "POKEMON_CLI_UPDATED"
+func getLatestVersion(updateUrl string) (string, error) {
 
-// Injected at build time:
-var Version string
-var AvailablePokemon string
-var UpdateUrl string
+	resp, err := http.Get(fmt.Sprintf("%s/versions/%s", updateUrl, Pokemon))
+
+	if err != nil {
+		return "", err
+	}
+
+	defer resp.Body.Close()
+
+	var versions common.Versions
+
+	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil || len(versions.All) == 0 {
+		return "", err
+	}
+
+	return versions.All[len(versions.All)-1], nil
+}
+
+func downloadUpdateVersion(exeDir string, updateUrl string, version string, permissions fs.FileMode) (string, error) {
+
+	updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
+	updateFile, err := os.Open(updateFilePath)
+	alreadyExists := err == nil
+
+	if alreadyExists {
+		defer updateFile.Close()
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/downloads/%s?version=%s", updateUrl, Pokemon, version))
+
+	if err != nil {
+		return "", err
+	}
+
+	if alreadyExists {
+
+		sha512, err := common.Sha512Hash(updateFile)
+
+		if err != nil {
+			return "", err
+		}
+
+		expectedSha512 := resp.Header.Get(common.Sha512Name)
+
+		if expectedSha512 != sha512 {
+			return "", common.NewSha512Error(updateFilePath, expectedSha512, sha512)
+		}
+
+		// Update file already exists.
+		return updateFilePath, nil
+	}
+
+	defer resp.Body.Close()
+
+	// Download to a temp file to attempt an atomic move on Unix systems.
+	// The temp file should be created in the same dir that the target file
+	// exists in. This prevents the file from being moved across
+	// filesystems.
+	updateFileTempPath := filepath.Join(exeDir, fmt.Sprintf(".%s-%s.%d.tmp", Pokemon, version, time.Now().UnixNano()))
+	if updateFile, err = os.OpenFile(updateFileTempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, permissions); err != nil {
+		return "", err
+	}
+
+	defer os.Remove(updateFileTempPath)
+
+	defer updateFile.Close()
+
+	hasher := sha512.New()
+
+	if _, err = io.Copy(io.MultiWriter(hasher, updateFile), resp.Body); err != nil {
+		return "", err
+	}
+
+	sha512 := common.ToHexHash(&hasher)
+	expectedSha512 := resp.Header.Get(common.Sha512Name)
+
+	if expectedSha512 != sha512 {
+		return "", common.NewSha512Error(updateFilePath, expectedSha512, sha512)
+	}
+
+	if err = updateFile.Sync(); err != nil {
+		return "", err
+	}
+
+	// Attempt atomic move.
+	if err = os.Rename(updateFileTempPath, updateFilePath); err != nil {
+		return "", err
+	}
+
+	return updateFilePath, nil
+}
 
 func main() {
 
@@ -75,6 +170,13 @@ func main() {
 	}
 
 	exeDir := filepath.Dir(exe)
+	exeStat, err := os.Stat(exe)
+
+	if err != nil {
+		panic(fmt.Sprintf("Error getting current executable permissions: %v", err))
+	}
+
+	exePermissions := exeStat.Mode().Perm()
 
 	isPosix := false
 	switch runtime.GOOS {
@@ -123,7 +225,14 @@ func main() {
 		Description: fmt.Sprintf("(optional) Run this executable in daemon mode outputting a Pokemon greeting on an interval. Configure the interval in seconds by specifying an optional positive integer. Defaults to %d second(s) if interval is unspecified", daemonIntervalSecs),
 	}
 
-	flags := []common.CliFlag{helpFlag, versionFlag, updateUrlFlag, daemonFlag}
+	var updateCheckIntervalSecs uint64 = 15
+	updateIntervalFlag := common.CliFlag{
+		Name:        "--update-check-interval",
+		Short:       "-u",
+		Description: fmt.Sprintf("(optional) Interval to check for updates when running in daemon mode. Defaults to %d second(s)", updateCheckIntervalSecs),
+	}
+
+	flags := []common.CliFlag{helpFlag, versionFlag, updateUrlFlag, daemonFlag, updateIntervalFlag}
 
 	// TODO check for updates on startup.
 	// TODO add flag to ignore updates on startup.
@@ -173,6 +282,22 @@ func main() {
 			} else {
 				i += 1
 			}
+		case updateIntervalFlag.Name, updateIntervalFlag.Short:
+
+			var err error
+
+			hasValue := i+1 < len(args)
+
+			if hasValue {
+				i += 1
+				daemonIntervalSecs, err = strconv.ParseUint(args[i], 10, 16)
+			}
+
+			if !hasValue || err != nil {
+				fmt.Fprintf(os.Stderr, "%s requires a positive integer value.\n", updateIntervalFlag.Name)
+				printUsage(Version, flags, AvailablePokemon)
+				os.Exit(64)
+			}
 		default:
 			if len(args[i]) == 0 || args[i][0] == '-' {
 				fmt.Fprintf(os.Stderr, "Invalid flag: \"%s\"\n", args[i])
@@ -193,129 +318,52 @@ func main() {
 		return
 	}
 
-	type Versions struct {
-		All []string `json:"versions"`
-	}
-
 	update := func() {
 
 		fmt.Printf("Checking for updates...\n")
-		resp, err := http.Get(fmt.Sprintf("%s/versions/%s", UpdateUrl, Pokemon))
-
-		if err != nil {
-			// TODO log more details or send info back to server
-			fmt.Fprintf(os.Stderr, "Failed to check for updates: %v\n", err)
-
-			return
-		}
-
-		versionsResp := resp
-		defer versionsResp.Body.Close()
-
-		var versions Versions
-
-		if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil || len(versions.All) == 0 {
-			// TODO log more details or send info back to server
-			fmt.Fprintf(os.Stderr, "Failed to check for updates: %v\n", err)
-
-			return
-		}
 
 		// TODO configure limits on versions to update.
-		version := versions.All[len(versions.All)-1]
+		version, err := getLatestVersion(UpdateUrl)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed determine versions available for updates: %v\n", err)
+			return
+		}
 
 		if version == Version {
+			fmt.Printf("%s is the already latest version.\n", version)
 			return
 		}
 
-		updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
-		updateFile, err := os.Open(updateFilePath)
+		updateFilePath, err := downloadUpdateVersion(exeDir, UpdateUrl, version, exePermissions)
 
-		if err != nil && os.IsNotExist(err) {
-
-			resp, err = http.Get(fmt.Sprintf("%s/downloads/%s?version=%s", UpdateUrl, Pokemon, version))
-
-			if err != nil {
-				// TODO log more details or send info back to server
-				fmt.Fprintf(os.Stderr, "Failed to download update: %v\n", err)
-				return
-			}
-
-			defer resp.Body.Close()
-
-			// TODO possibly download to a temp file and atomic copy
-			updateFile, err = os.Create(updateFilePath)
-
-			if err != nil {
-				// TODO log more details or send info back to server
-				fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
-				return
-			}
-
-			_, err = io.Copy(updateFile, resp.Body)
-
-			if err != nil {
-				updateFile.Close()
-
-				// TODO log more details or send info back to server
-				fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
-				return
-			}
-
-			updateFile.Close()
-
-		} else if err != nil {
-			// TODO log more details or send info back to server
-			fmt.Fprintf(os.Stderr, "Failed to open update file: %v\n", err)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to download update file: %v\n", err)
 			return
-		} else {
-			updateFile.Close()
-		}
-
-		if isPosix {
-			info, err := os.Stat(updateFilePath)
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
-				return
-			}
-
-			originalMode := info.Mode().Perm()
-
-			// Add user execute permission to the original mode
-			newMode := originalMode | 0o100
-
-			// Apply the new permissions
-			err = os.Chmod(updateFilePath, newMode)
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to install update: %v\nManually mark the file as executable and restart the process to update:\nchmod +x \"%s\"\n", err, updateFilePath)
-				return
-			}
-
-			err = os.Setenv(PokemonCliUpdatedName, "TRUE")
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
-				return
-			}
-
-			// If the cli ever needs to clean up resources, we may need to force forking another process instead. For now, we reuse the existing process for a seamless upgrade that keeps the existing PID.
-			// TODO Exec doesn't exit, so I need to figure out what to do about defer calls
-			err = syscall.Exec(updateFilePath, newArgs(os.Args, updateFilePath), os.Environ())
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to start updated version: %v\n", err)
-			} else {
-				os.Exit(0)
-			}
 		}
 
 		err = os.Setenv(PokemonCliUpdatedName, "TRUE")
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to install update: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Failed to set up for update: %v\n", err)
 			return
+		}
+
+		if isPosix {
+
+			// On Posix, reuse the existing process via exec for a seamless upgrade
+			// that keeps the existing PID.
+			//
+			// If the cli ever needs to clean up resources, we may need to force
+			// forking another process instead.
+			err = syscall.Exec(updateFilePath, newArgs(os.Args, updateFilePath), os.Environ())
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to start updated version: %v\n", err)
+			} else {
+				// This line should never be hit as exec exits abruptly.
+				os.Exit(0)
+			}
 		}
 
 		cmd := exec.Command(updateFilePath, newArgs(os.Args, updateFilePath)...)
@@ -323,9 +371,8 @@ func main() {
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start updated version: %v\n", err)
-			return
 		} else {
-			fmt.Fprintf(os.Stderr, "Started updated version: %s. Shutting down %s.\n", version, Version)
+			fmt.Fprintf(os.Stderr, "Started updated version: %s. Shutting down: %s.\n", version, Version)
 			os.Exit(0)
 		}
 	}
@@ -336,6 +383,17 @@ func main() {
 	} else {
 		update()
 	}
+
+	// Background thread to update versions. This thread may be killed at any
+	// time, so don't expect any defer calls the complete. This should not be
+	// used for writing external data to the filesystem.
+	go func() {
+		for {
+			time.Sleep(time.Duration(updateCheckIntervalSecs) * time.Second)
+			
+			update()
+		}
+	}()
 
 	for {
 
@@ -350,7 +408,5 @@ func main() {
 		} else {
 			time.Sleep(time.Duration(daemonIntervalSecs) * time.Second)
 		}
-
-		// TODO periodically check for updates in a goroutine
 	}
 }

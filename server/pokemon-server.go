@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/stiemannkj1/auto-update-example/common"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/stiemannkj1/auto-update-example/common"
 )
 
 func printUsage(flags []common.CliFlag) {
@@ -36,32 +37,27 @@ type Settings struct {
 }
 
 type VersionsCache struct {
-	Versions common.Versions
-	Json     []byte
-	Set      map[string]bool
-	Lock     sync.RWMutex
+	Versions           common.Versions
+	Json               []byte
+	VersionToSha512Map map[string]string
+	Lock               sync.RWMutex
 }
 
-func versionExists(versions *VersionsCache, version string) bool {
+func getSha512(versions *VersionsCache, version string) string {
 	versions.Lock.RLock()
 	defer versions.Lock.RUnlock()
-	_, exists := versions.Set[version]
-	return exists
+	sha512, exists := versions.VersionToSha512Map[version]
+
+	if exists {
+		return sha512
+	} else {
+		return ""
+	}
 }
 
 type VersionMessage struct {
 	Msg     string `json:"message"`
 	Version string `json:"version"`
-}
-
-func toSet(strings []string) map[string]bool {
-	stringSet := make(map[string]bool, len(strings))
-
-	for _, s := range strings {
-		stringSet[s] = true
-	}
-
-	return stringSet
 }
 
 func readJsonFile[T any](filePath string, maxSize int64, value *T) error {
@@ -91,26 +87,39 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 		return false, err
 	}
 
+	// Find all versions and calculate all hashes prior to obtaining the locks
+	// to minimize time spent holding the write lock.
 	availableVersions := make([]string, 0, len(entries))
+	versionToSha512Map := make(map[string]string, len(entries))
 
 	for _, entry := range entries {
 		possibleVersion := entry.Name()
 
-		if !version.MatchString(possibleVersion) {
+		if !VersionRegex.MatchString(possibleVersion) {
 			logger.Warn(fmt.Sprintf("Ignoring invalid version: %s", possibleVersion))
 			continue
 		}
 
 		path := filepath.Join(settings.PokemonVersionDir, entry.Name(), Pokemon)
-		_, err = os.Open(path)
+		pokemonFile, err := os.Open(path)
 
 		if err != nil && os.IsNotExist(err) {
-			logger.Warn(fmt.Sprintf("Ignoring version with missing pokemon binary: %s", path))
+			logger.Warn("Ignoring version with missing pokemon binary.", "file_name", path, "error", err)
 			continue
 		} else if err != nil {
-			logger.Warn(fmt.Sprintf("Error reading pokemon binary: %s", path))
+			logger.Warn("Error reading pokemon binary.", "file_name", path, "error", err)
 			continue
 		}
+
+		sha512, err := common.Sha512Hash(pokemonFile)
+		pokemonFile.Close()
+
+		if err != nil {
+			logger.Warn(fmt.Sprintf("Failed to obtain %s", common.Sha512Name), "file_name", path, "error", err)
+			continue
+		}
+
+		versionToSha512Map[possibleVersion] = sha512
 
 		availableVersions = append(availableVersions, possibleVersion)
 	}
@@ -126,7 +135,7 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 
 	if err != nil {
 		if logger.Enabled(context.Background(), slog.LevelWarn) {
-			logger.Warn(fmt.Sprintf("Unable to convert versions to JSON: [%s]", strings.Join(availableVersions, ",")))
+			logger.Warn(fmt.Sprintf("Unable to convert versions to JSON [%s]", strings.Join(availableVersions, ",")), "error", err)
 		}
 
 		return false, err
@@ -136,7 +145,7 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 	defer versions.Lock.Unlock()
 
 	versions.Versions = allVersions
-	versions.Set = toSet(availableVersions)
+	versions.VersionToSha512Map = versionToSha512Map
 	versions.Json = versionsJson
 
 	return true, nil
@@ -149,7 +158,7 @@ func logRequest(logger *slog.Logger, r *http.Request) {
 const Pokemon string = "pokemon"
 const MB int64 = 1024 * 1024
 
-var version *regexp.Regexp = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]$`)
+var VersionRegex *regexp.Regexp = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]$`)
 
 func main() {
 
@@ -197,7 +206,7 @@ func main() {
 			err := readJsonFile(args[i], 1*MB, &settings)
 
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Unable to open settings file \"%s\":%v\n\n", args[i], err)
+				fmt.Fprintf(os.Stderr, "Unable to open settings file \"%s\":\n%v\n\n", args[i], err)
 				printUsage(flags)
 				os.Exit(64)
 			}
@@ -225,7 +234,7 @@ func main() {
 		err := os.MkdirAll(settings.LogsDir, 0b111111101)
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to create log dirs \"%s\": %v\n\n", settings.LogsDir, err)
+			fmt.Fprintf(os.Stderr, "Failed to create log dirs \"%s\":\n%v\n\n", settings.LogsDir, err)
 			printUsage(flags)
 			os.Exit(1)
 		}
@@ -234,7 +243,7 @@ func main() {
 		logFile, err := os.Create(logFilePath)
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to open log file \"%s\" for writing: %v\n\n", logFilePath, err)
+			fmt.Fprintf(os.Stderr, "Failed to open log file \"%s\" for writing:\n%v\n\n", logFilePath, err)
 			printUsage(flags)
 			os.Exit(1)
 		}
@@ -256,7 +265,7 @@ func main() {
 	updated, err := updateVersions(logger, &settings, &versions)
 
 	if !updated || err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to find initial versions from pokemon version dir \"%s\": %v\n\n", settings.PokemonVersionDir, err)
+		fmt.Fprintf(os.Stderr, "Failed to find initial versions from pokemon version dir \"%s\":\n%v\n\n", settings.PokemonVersionDir, err)
 		printUsage(flags)
 		os.Exit(1)
 	} else if logger.Enabled(context.Background(), slog.LevelInfo) {
@@ -299,8 +308,9 @@ func main() {
 		logRequest(logger, r)
 
 		version := r.URL.Query().Get("version")
+		sha512 := getSha512(&versions, version)
 
-		if !versionExists(&versions, version) {
+		if sha512 == "" {
 			w.WriteHeader(http.StatusNotFound)
 			w.Header().Add("Content-Type", "application/json")
 			json := json.NewEncoder(w)
@@ -310,13 +320,14 @@ func main() {
 			})
 
 			if err != nil {
-				logger.Warn("Error response failed for", "url", r.URL)
+				logger.Warn("Error response failed for", "url", r.URL, "error", err)
 			}
 
 			return
 		}
 
 		w.Header().Add("Content-Disposition", fmt.Sprintf("attachment; filename=pokemon-%s", version))
+		w.Header().Add(common.Sha512Name, sha512)
 
 		// TODO potentially cache the latest file in memory since it's the most
 		// likely to be requested.
@@ -349,7 +360,7 @@ func main() {
 	err = http.ListenAndServe(fmt.Sprintf(":%d", settings.Port), nil)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start server listening on %d: %v\n\n", settings.Port, err)
+		fmt.Fprintf(os.Stderr, "Failed to start server listening on %d:\n%v\n\n", settings.Port, err)
 		os.Exit(1)
 	}
 }
