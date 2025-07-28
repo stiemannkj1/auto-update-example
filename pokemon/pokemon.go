@@ -71,7 +71,7 @@ func newArgs(oldArgs []string, newExe string) []string {
 // Gets the latest available version from the server.
 func getLatestVersion(updateUrl string) (string, error) {
 
-	resp, err := http.Get(fmt.Sprintf("%s/versions/%s", updateUrl, Pokemon))
+	resp, err := http.Get(fmt.Sprintf("%s/v1.0/versions/%s", updateUrl, Pokemon))
 
 	if err != nil {
 		return "", err
@@ -92,7 +92,7 @@ func getLatestVersion(updateUrl string) (string, error) {
 // the filesystem.
 func downloadUpdateVersion(exeDir string, updateUrl string, version string, permissions fs.FileMode) (string, error) {
 
-	// TODO handle file name collisions.
+	// TODO maybe handle file name collisions though they're extremely unlikely.
 	updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
 	updateFile, err := os.Open(updateFilePath)
 	alreadyExists := err == nil
@@ -101,7 +101,7 @@ func downloadUpdateVersion(exeDir string, updateUrl string, version string, perm
 		defer updateFile.Close()
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s/downloads/%s?version=%s", updateUrl, Pokemon, version))
+	resp, err := http.Get(fmt.Sprintf("%s/v1.0/downloads/%s?version=%s", updateUrl, Pokemon, version))
 
 	if err != nil {
 		return "", err

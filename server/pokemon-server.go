@@ -355,7 +355,7 @@ func main() {
 
 	// Versions enpoint that publishes the versions of the CLI tool which can
 	// be downloaded:
-	http.HandleFunc(fmt.Sprintf("/versions/%s", Pokemon), func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(fmt.Sprintf("/v1.0/versions/%s", Pokemon), func(w http.ResponseWriter, r *http.Request) {
 
 		logRequest(logger, r)
 
@@ -371,9 +371,13 @@ func main() {
 	})
 
 	// Download endpoint which serves the CLI executable binary:
-	http.HandleFunc(fmt.Sprintf("/downloads/%s", Pokemon), func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(fmt.Sprintf("/v1.0/downloads/%s", Pokemon), func(w http.ResponseWriter, r *http.Request) {
 
 		logRequest(logger, r)
+
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusForbidden)
+		}
 
 		version := r.URL.Query().Get("version")
 		sha512 := getSha512(&versions, version)
@@ -394,6 +398,7 @@ func main() {
 			return
 		}
 
+		w.Header().Add("Content-Type", "application/octet-stream")
 		w.Header().Add("Content-Disposition", fmt.Sprintf("attachment; filename=pokemon-%s", version))
 		w.Header().Add(common.Sha512Name, sha512)
 

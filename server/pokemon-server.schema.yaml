@@ -1,0 +1,77 @@
+openapi: 3.0.0
+info:
+  title: Pokemon API
+  version: v1.0
+paths:
+  /healthcheck:
+    get:
+      summary: Server Healthcheck
+      description: Returns 200 if the server is running.
+      responses:
+        "200":
+          description: A list of available versions
+          content: {}
+
+  /v1.0/versions/pokemon:
+    get:
+      summary: Available Pokemon Versions
+      description: Returns the available Pokemon versions as an array of version strings.
+      responses:
+        "200":
+          description: A list of available versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      type: string
+                      example: 1.0.0
+                required:
+                  - versions
+
+  /v1.0/downloads/pokemon:
+    get:
+      summary: Pokemon Binary
+      description: Downloads the Pokemon binary for a specified version as an attachment.
+      parameters:
+        - name: version
+          in: query
+          required: true
+          schema:
+            type: string
+            example: 1.0.0
+          description: The version of the Pokemon binary to download.
+      responses:
+        "200":
+          description: The Pokemon binary file as an attachment.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: Indicates attachment filename for download
+              schema:
+                type: string
+                example: attachment; filename=pokemon-1.0.0
+        "404":
+          description: Version not found.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: The error message related to the requested version.
+                    example: Not found.
+                  version:
+                    type: string
+                    description: The requested version.
+                    example: 1.0.0
+                required:
+                  - versions
