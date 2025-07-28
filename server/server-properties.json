@@ -1,0 +1,6 @@
+{
+    "Port": 8080,
+    "PokemonVersionDir": "/Volumes/Projects/stiemannkj1/auto-update-example/pokemon/version",
+    "VersionCheckIntervalSecs": 15,
+    "LogsLevel": "INFO"
+}
