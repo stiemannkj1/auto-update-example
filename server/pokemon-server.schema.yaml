@@ -18,7 +18,7 @@ paths:
       description: Returns the available Pokemon versions as an array of version strings.
       responses:
         "200":
-          description: A list of available versions
+          description: A list of available versions in descending order
           content:
             application/json:
               schema:

@@ -4,7 +4,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,8 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
-	"strings"
+	"sort"
 	"sync"
 	"time"
 
@@ -38,10 +36,10 @@ type Settings struct {
 	// .
 	// ├── 1.0.0/
 	// │     └── pokemon
-	// |
+	// │
 	// ├── 2.0.0/
 	// │     └──  pokemon
-	// |
+	// │
 	// └── 3.0.0/
 	//       └──  pokemon
 	PokemonVersionDir string
@@ -57,7 +55,7 @@ type Settings struct {
 // Use the Lock when reading and writing data otherwise access will not be
 // thread-safe.
 type VersionsCache struct {
-	Versions           common.Versions
+	Versions           common.SemanticVersions
 	Json               []byte
 	VersionToSha512Map map[string]string
 	Lock               sync.RWMutex
@@ -128,14 +126,16 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 
 	// Find all versions and calculate all hashes prior to obtaining the locks
 	// to minimize time spent holding the write lock.
-	availableVersions := make([]string, 0, len(entries))
+	availableVersions := common.SemVers(make([]common.SemVer, 0, len(entries)))
 	versionToSha512Map := make(map[string]string, len(entries))
 
 	for _, entry := range entries {
 		possibleVersion := entry.Name()
 
-		if !VersionRegex.MatchString(possibleVersion) {
-			logger.Warn(fmt.Sprintf("Ignoring invalid version: %s", possibleVersion))
+		version, err := common.ParseSemVer(possibleVersion)
+
+		if err != nil {
+			logger.Warn(fmt.Sprintf("Ignoring invalid version: %s", possibleVersion), "error", err)
 			continue
 		}
 
@@ -160,23 +160,21 @@ func updateVersions(logger *slog.Logger, settings *Settings, versions *VersionsC
 
 		versionToSha512Map[possibleVersion] = sha512
 
-		availableVersions = append(availableVersions, possibleVersion)
+		availableVersions = append(availableVersions, version)
 	}
 
 	if maps.Equal(versionToSha512Map, versions.VersionToSha512Map) {
 		return false, nil
 	}
 
-	allVersions := common.Versions{
+	sort.Sort(availableVersions)
+	allVersions := common.SemanticVersions{
 		All: availableVersions,
 	}
 	versionsJson, err := json.Marshal(&allVersions)
 
 	if err != nil {
-		if logger.Enabled(context.Background(), slog.LevelWarn) {
-			logger.Warn(fmt.Sprintf("Unable to convert versions to JSON [%s]", strings.Join(availableVersions, ",")), "error", err)
-		}
-
+		logger.Warn(fmt.Sprintf("Unable to convert versions to JSON %s", allVersions), "error", err)
 		return false, err
 	}
 
@@ -197,8 +195,6 @@ func logRequest(logger *slog.Logger, r *http.Request) {
 
 const Pokemon string = "pokemon"
 const MB int64 = 1024 * 1024
-
-var VersionRegex *regexp.Regexp = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]$`)
 
 func main() {
 
@@ -332,8 +328,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to find initial versions from pokemon version dir \"%s\":\n%v\n\n", settings.PokemonVersionDir, err)
 		printUsage(flags)
 		os.Exit(1)
-	} else if logger.Enabled(context.Background(), slog.LevelInfo) {
-		logger.Info(fmt.Sprintf("Updated versions. Found: [%s]", strings.Join(versions.Versions.All, ",")))
+	} else {
+		logger.Info(fmt.Sprintf("Updated versions. Found: %s", versions.Versions))
 	}
 
 	// Initialize Endpoints:
@@ -416,13 +412,10 @@ func main() {
 
 			if err != nil {
 				logger.Warn(fmt.Sprintf("Failed to update versions from %s", settings.PokemonVersionDir), "error", err)
-			} else if logger.Enabled(context.Background(), slog.LevelInfo) {
-
-				if updated {
-					logger.Info(fmt.Sprintf("Updated versions. Found [%s]", strings.Join(versions.Versions.All, ",")))
-				} else {
-					logger.Info(fmt.Sprintf("No new versions found. Using existing versions: [%s]", strings.Join(versions.Versions.All, ",")))
-				}
+			} else if updated {
+				logger.Info(fmt.Sprintf("Updated versions. Found %s", versions.Versions))
+			} else {
+				logger.Info(fmt.Sprintf("No new versions found. Using existing versions: %s", versions.Versions))
 			}
 
 			time.Sleep(time.Duration(settings.VersionCheckIntervalSecs) * time.Second)

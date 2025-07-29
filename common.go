@@ -4,10 +4,12 @@ package common
 import (
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -32,9 +34,147 @@ func Capitalize(s string) string {
 	return fmt.Sprintf("%s%s", strings.ToUpper(s[0:1]), s[1:])
 }
 
+type SemVer struct {
+	Major  uint64
+	Minor  uint64
+	Patch  uint64
+	String string
+}
+
+type Ebyte byte
+
+func e(e byte) uint64 {
+
+	var value uint64
+	value = 1
+
+	if e == 0 {
+		return value
+	}
+
+	for i := 0; i < int(e); i++ {
+		value *= 10
+	}
+
+	return value
+}
+
+func ParseSemVer(version string) (SemVer, error) {
+
+	var semVer SemVer
+	semVer.String = version
+	var subVersion uint64
+	var i byte
+
+	size := len(version)
+
+	if size > math.MaxUint8 {
+		return SemVer{}, fmt.Errorf("%s too large", version)
+	} else if size < len("0.0.0") {
+		return SemVer{}, fmt.Errorf("%s too small", version)
+	}
+
+	var lastDotIndex byte
+	lastDotIndex = byte(size - 1)
+	subVersionIndex := 0
+
+	for i = lastDotIndex; ; i -= 1 {
+		if version[i] == '.' && i != 0 && i != byte(size-1) {
+			switch subVersionIndex {
+			case 0:
+				semVer.Patch = subVersion
+			case 1:
+				semVer.Minor = subVersion
+			default:
+				return SemVer{}, fmt.Errorf("too many version sections in %s; extra section starts at %d", version, i)
+			}
+			lastDotIndex = i - 1
+			subVersion = 0
+			subVersionIndex += 1
+		} else if '0' <= version[i] && version[i] <= '9' {
+			subVersion += uint64(version[i]-byte('0')) * e(lastDotIndex-i)
+		} else {
+			return SemVer{}, fmt.Errorf("%s was not a semantic version; invalid character %c at %d", version, version[i], i)
+		}
+
+		if i == 0 {
+			break
+		}
+	}
+
+	semVer.Major = subVersion
+
+	const MAX_SUBVERSIONS = 3
+
+	if subVersionIndex == (MAX_SUBVERSIONS - 1) {
+		return semVer, nil
+	}
+
+	return SemVer{}, fmt.Errorf("%s was truncated; expected %d version sections", version, MAX_SUBVERSIONS)
+}
+
+func (v SemVer) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.String)
+}
+
+type SemVers []SemVer
+
+func (a SemVers) Len() int {
+	return len(a)
+}
+
+func (a SemVers) Less(i, j int) bool {
+
+	if a[i].Major < a[j].Major {
+		return true
+	}
+
+	if a[i].Major == a[j].Minor &&
+		a[i].Minor < a[j].Minor {
+		return true
+	}
+
+	if a[i].Major == a[j].Minor &&
+		a[i].Minor == a[j].Minor &&
+		a[i].Patch < a[j].Patch {
+		return true
+	}
+
+	return false
+}
+
+func (a SemVers) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+
 // Version data used to communicate between client and server
 type Versions struct {
+	// Versions in ascending order
 	All []string `json:"versions"`
+}
+
+// Version data used to communicate between client and server
+type SemanticVersions struct {
+	// Versions in ascending order
+	All []SemVer `json:"versions"`
+}
+
+func (versions SemanticVersions) String() string {
+
+	var builder strings.Builder
+	builder.WriteRune('[')
+
+	for i, version := range versions.All {
+
+		if i > 0 {
+			builder.WriteRune(',')
+		}
+
+		builder.WriteString(version.String)
+	}
+
+	builder.WriteRune(']')
+	return builder.String()
 }
 
 type CliFlag struct {

@@ -134,7 +134,7 @@ func main() {
 		panic(fmt.Sprintf("Failed to create demo dir \"%s\":\n%v", demoDir, err))
 	}
 
-	// Build CLI v1.0.0
+	// Build CLI v2.0.0
 	var timeoutSecs int64 = 60
 	var _ any
 	_, _ = runCommand(
@@ -143,29 +143,29 @@ func main() {
 		"go",
 		"build",
 		"-ldflags",
-		"-X 'main.Version=1.0.0' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'",
+		"-X 'main.Version=2.0.0' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'",
 		"-o",
-		filepath.FromSlash("./test/demo/version/1.0.0/pokemon"),
+		filepath.FromSlash("./test/demo/version/2.0.0/pokemon"),
 		filepath.FromSlash("./pokemon"),
 	)
 
-	// Copy 1.0.0 to the demo dir.
-	src := filepath.FromSlash("./test/demo/version/1.0.0/pokemon")
+	// Copy 2.0.0 to the demo dir.
+	src := filepath.FromSlash("./test/demo/version/2.0.0/pokemon")
 	dest := exe("./test/demo/pokemon")
 	if err = copyFile(dest, src); err != nil {
 		panic(fmt.Sprintf("Failed to copy \"%s\" to \"%s\":\n%v", src, dest, err))
 	}
 
-	// Build CLI v2.0.0
+	// Build CLI v10.0.0
 	_, _ = runCommand(
 		timeoutSecs,
 		nil,
 		"go",
 		"build",
 		"-ldflags",
-		"-X 'main.Version=2.0.0' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,raichu,charmander,charmeleon,squirtle,wartortle,bulbasaur,ivysaur'",
+		"-X 'main.Version=10.0.0' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,raichu,charmander,charmeleon,squirtle,wartortle,bulbasaur,ivysaur'",
 		"-o",
-		filepath.FromSlash("./test/demo/version/2.0.0/pokemon"),
+		filepath.FromSlash("./test/demo/version/10.0.0/pokemon"),
 		filepath.FromSlash("./pokemon"),
 	)
 
@@ -197,7 +197,7 @@ func main() {
 		panic(fmt.Sprintf("Failed to start server in %d seconds:\n%v", timeoutSecs, err))
 	}
 
-	// Attempt to run CLI v1.0.0 with a pokemon from v2.0.0. If the command
+	// Attempt to run CLI v2.0.0 with a pokemon from v10.0.0. If the command
 	// fails, fail the test.
 	stdout, stderr := runCommand(timeoutSecs, []string{}, exe("./test/demo/pokemon"), "raichu")
 	// TODO this fails in docker even though a manual test runs correctly.
