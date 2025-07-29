@@ -81,6 +81,15 @@ docker run --rm --volume="$PWD:/auto-update-example/" golang:1.24-alpine sh -c "
 TODO Fix e2e.go to work correctly on docker. The manual test passes in docker,
 and the network is correct so it's unclear what the problem is.
 
+Or on Windows:
+
+```
+go build -o .\e2e.exe .\test && .\e2e.exe
+```
+
+TODO everything in the test seems to work (update, output etc), but the
+`pokemon` CLI is returning exit code 1.
+
 ## Format
 
 To format all `.go` files:

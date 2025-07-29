@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -100,16 +102,26 @@ func copyFile(dst string, src string) error {
 	return nil
 }
 
+const WINDOWS = runtime.GOOS == "windows"
+
+func exe(exe string) string {
+	if WINDOWS {
+		return filepath.FromSlash(exe) + ".exe"
+	}
+
+	return exe
+}
+
 func main() {
 
 	// Clear out previous test binaries and data.
-	_, err := os.Open("./test")
+	_, err := os.Open(filepath.FromSlash("./test"))
 
 	if err != nil {
 		panic(fmt.Sprintf("Error. e2e test must be run from project root:\n%v", err))
 	}
 
-	demoDir := "./test/demo"
+	demoDir := filepath.FromSlash("./test/demo")
 	err = os.RemoveAll(demoDir)
 
 	if err != nil {
@@ -133,13 +145,13 @@ func main() {
 		"-ldflags",
 		"-X 'main.Version=1.0.0' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,charmander,squirtle,bulbasaur'",
 		"-o",
-		"./test/demo/version/1.0.0/pokemon",
-		"./pokemon",
+		filepath.FromSlash("./test/demo/version/1.0.0/pokemon"),
+		filepath.FromSlash("./pokemon"),
 	)
 
 	// Copy 1.0.0 to the demo dir.
-	src := "./test/demo/version/1.0.0/pokemon"
-	dest := "./test/demo/pokemon"
+	src := filepath.FromSlash("./test/demo/version/1.0.0/pokemon")
+	dest := exe("./test/demo/pokemon")
 	if err = copyFile(dest, src); err != nil {
 		panic(fmt.Sprintf("Failed to copy \"%s\" to \"%s\":\n%v", src, dest, err))
 	}
@@ -153,15 +165,15 @@ func main() {
 		"-ldflags",
 		"-X 'main.Version=2.0.0' -X 'main.UpdateUrl=http://localhost:8080' -X 'main.AvailablePokemon=pikachu,raichu,charmander,charmeleon,squirtle,wartortle,bulbasaur,ivysaur'",
 		"-o",
-		"./test/demo/version/2.0.0/pokemon",
-		"./pokemon",
+		filepath.FromSlash("./test/demo/version/2.0.0/pokemon"),
+		filepath.FromSlash("./pokemon"),
 	)
 
 	// Build the server.
-	_, _ = runCommand(timeoutSecs, nil, "go", "build", "-o", "./test/demo/server", "./server")
+	_, _ = runCommand(timeoutSecs, nil, "go", "build", "-o", exe("./test/demo/server"), filepath.FromSlash("./server"))
 
 	// Run the server.
-	cmd := startCommand([]string{}, "./test/demo/server", "--settings", "test/server-properties.json")
+	cmd := startCommand([]string{}, exe("./test/demo/server"), "--settings", filepath.FromSlash("./test/server-properties.json"))
 	defer cmd.Process.Kill()
 
 	// Wait for the server to start.
@@ -176,6 +188,8 @@ func main() {
 			break
 		}
 
+		resp.Body.Close()
+
 		// Otherwise retry.
 	}
 
@@ -184,8 +198,8 @@ func main() {
 	}
 
 	// Attempt to run CLI v1.0.0 with a pokemon from v2.0.0. If the command
-	// fails, the fail the test.
-	stdout, stderr := runCommand(timeoutSecs, []string{}, "test/demo/pokemon", "raichu")
+	// fails, fail the test.
+	stdout, stderr := runCommand(timeoutSecs, []string{}, exe("./test/demo/pokemon"), "raichu")
 	// TODO this fails in docker even though a manual test runs correctly.
 
 	// If stdout doesn't show a greeting from raichu, fail the test.

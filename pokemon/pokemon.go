@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,15 +22,23 @@ import (
 	"github.com/stiemannkj1/auto-update-example/common"
 )
 
-const Pokemon string = "pokemon"
+const POKEMON string = "pokemon"
 
 // The env variable name that is used to determine if the process is the
 // "updater" or the "updatee" (in other words, the actual CLI tool). If the
 // value of this env variable is "TRUE", then the process will be the "updatee"
 // tool and output greetings.
-const PokemonCli string = "POKEMON_CLI"
+const POKEMON_CLI string = "POKEMON_CLI"
 
 const SHORT_TIMEOUT_SECS = 1
+
+func exeSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	} else {
+		return " "
+	}
+}
 
 // Signal to shutdown the "updatee" tool gracefully. The "updater" sends this
 // value via stdin and the "updatee" should attempt to shut down immediately
@@ -216,7 +225,7 @@ func main() {
 		}
 	}
 
-	if strings.ToUpper(os.Getenv(PokemonCli)) != "TRUE" {
+	if strings.ToUpper(os.Getenv(POKEMON_CLI)) != "TRUE" {
 
 		// If the updater completely fails for some bizarre reason, we fall
 		// back to simply running the command directly without any update
@@ -290,10 +299,10 @@ func kill(cmd *exec.Cmd) {
 func updateLoop(exe string, exeDir string, exePermissions fs.FileMode, isDaemon bool, initialVersion string, updateUrl string, updateCheckIntervalSecs uint64) error {
 
 	// Propagate this value to child processes.
-	err := os.Setenv(PokemonCli, "TRUE")
+	err := os.Setenv(POKEMON_CLI, "TRUE")
 
 	if err != nil {
-		return fmt.Errorf("update failed to set %s", PokemonCli)
+		return fmt.Errorf("update failed to set %s", POKEMON_CLI)
 	}
 
 	var prevCmd Cmd
@@ -383,7 +392,7 @@ func updateLoop(exe string, exeDir string, exePermissions fs.FileMode, isDaemon 
 // Gets the latest available version from the server.
 func getLatestVersion(updateUrl string) (string, error) {
 
-	resp, err := http.Get(fmt.Sprintf("%s/v1.0/versions/%s", updateUrl, Pokemon))
+	resp, err := http.Get(fmt.Sprintf("%s/v1.0/versions/%s", updateUrl, POKEMON))
 
 	if err != nil {
 		return "", err
@@ -410,7 +419,7 @@ func downloadUpdateVersion(exeDir string, updateUrl string, version string, perm
 
 	// TODO maybe handle file name collisions with the temp files though
 	// they're extremely unlikely.
-	updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
+	updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s%s", POKEMON, version, exeSuffix()))
 	updateFile, err := os.Open(updateFilePath)
 	alreadyExists := err == nil
 
@@ -418,7 +427,7 @@ func downloadUpdateVersion(exeDir string, updateUrl string, version string, perm
 		defer updateFile.Close()
 	}
 
-	resp, err := http.Get(fmt.Sprintf("%s/v1.0/downloads/%s?version=%s", updateUrl, Pokemon, version))
+	resp, err := http.Get(fmt.Sprintf("%s/v1.0/downloads/%s?version=%s", updateUrl, POKEMON, version))
 
 	if err != nil {
 		return "", err
@@ -449,7 +458,7 @@ func downloadUpdateVersion(exeDir string, updateUrl string, version string, perm
 	// The temp file should be created in the same dir that the target file
 	// exists in. This prevents the file from being moved across
 	// filesystems.
-	updateFileTempPath := filepath.Join(exeDir, fmt.Sprintf(".%s-%s.%d.tmp", Pokemon, version, time.Now().UnixNano()))
+	updateFileTempPath := filepath.Join(exeDir, fmt.Sprintf(".%s-%s.%d.tmp", POKEMON, version, time.Now().UnixNano()))
 	if updateFile, err = os.OpenFile(updateFileTempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, permissions); err != nil {
 		return "", err
 	}
@@ -472,6 +481,12 @@ func downloadUpdateVersion(exeDir string, updateUrl string, version string, perm
 	}
 
 	if err = updateFile.Sync(); err != nil {
+		return "", err
+	}
+
+	// Close the file to avoid locking it on Windows and failing the rename
+	// below.
+	if err = updateFile.Close(); err != nil {
 		return "", err
 	}
 
