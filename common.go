@@ -69,17 +69,18 @@ func ParseSemVer(version string) (SemVer, error) {
 	size := len(version)
 
 	if size > math.MaxUint8 {
-		return SemVer{}, fmt.Errorf("%s too large", version)
+		return SemVer{}, fmt.Errorf("version %s too large", version)
 	} else if size < len("0.0.0") {
-		return SemVer{}, fmt.Errorf("%s too small", version)
+		return SemVer{}, fmt.Errorf("version %s too small", version)
 	}
 
 	var lastDotIndex byte
 	lastDotIndex = byte(size - 1)
 	subVersionIndex := 0
+	requireDigit := true
 
 	for i = lastDotIndex; ; i -= 1 {
-		if version[i] == '.' && i != 0 && i != byte(size-1) {
+		if !requireDigit && version[i] == '.' && i > 0 {
 			switch subVersionIndex {
 			case 0:
 				semVer.Patch = subVersion
@@ -91,8 +92,10 @@ func ParseSemVer(version string) (SemVer, error) {
 			lastDotIndex = i - 1
 			subVersion = 0
 			subVersionIndex += 1
+			requireDigit = true
 		} else if '0' <= version[i] && version[i] <= '9' {
 			subVersion += uint64(version[i]-byte('0')) * e(lastDotIndex-i)
+			requireDigit = false
 		} else {
 			return SemVer{}, fmt.Errorf("%s was not a semantic version; invalid character %c at %d", version, version[i], i)
 		}

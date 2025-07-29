@@ -24,6 +24,7 @@ func TestDoesNotParseInvalidSemVer(t *testing.T) {
 	for _, testCase := range []string{
 		"",
 		"foo",
+		"9..919",
 		"9..9..19",
 		"1234.1234.",
 		".1234.1234.",
