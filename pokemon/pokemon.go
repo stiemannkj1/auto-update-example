@@ -1,4 +1,5 @@
-// CLI tool which shows greetings from various pokemon.
+// CLI tool which shows greetings from various pokemon and automatically
+// updates itself.
 package main
 
 import (
@@ -12,18 +13,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/stiemannkj1/auto-update-example/common"
 )
 
 const Pokemon string = "pokemon"
-const PokemonCliUpdatedName string = "POKEMON_CLI_UPDATED"
+
+// The env variable name that is used to determine if the process is the
+// "updater" or the "updatee" (in other words, the actual CLI tool). If the
+// value of this env variable is "TRUE", then the process will be the "updatee"
+// tool and output greetings.
+const PokemonCli string = "POKEMON_CLI"
+
+const SHORT_TIMEOUT_SECS = 1
+
+// Signal to shutdown the "updatee" tool gracefully. The "updater" sends this
+// value via stdin and the "updatee" should attempt to shut down immediately
+// upon reading this value from stdin.
+var shutdownSignal = []byte{1}
 
 // Injected at build time:
 var Version string
@@ -49,123 +60,6 @@ func printUsage(version string, flags []common.CliFlag, availablePokemon []strin
 	fmt.Fprintf(os.Stderr, "\nVersion: %s\n", version)
 }
 
-// Copies old CLI args to a new array and changes the 0th arg to point to a new
-// executable path.
-func newArgs(oldArgs []string, newExe string) []string {
-
-	if len(oldArgs) == 0 {
-		return []string{}
-	}
-
-	newArgs := make([]string, len(oldArgs))
-	copied := copy(newArgs, oldArgs)
-
-	if copied != len(oldArgs) {
-		panic(fmt.Sprintf("Expected %d args to be copied, but instead %d were copied.", len(oldArgs), copied))
-	}
-
-	newArgs[0] = newExe
-	return newArgs
-}
-
-// Gets the latest available version from the server.
-func getLatestVersion(updateUrl string) (string, error) {
-
-	resp, err := http.Get(fmt.Sprintf("%s/v1.0/versions/%s", updateUrl, Pokemon))
-
-	if err != nil {
-		return "", err
-	}
-
-	defer resp.Body.Close()
-
-	var versions common.Versions
-
-	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil || len(versions.All) == 0 {
-		return "", err
-	}
-
-	return versions.All[len(versions.All)-1], nil
-}
-
-// Downloads the specified version of the tool if it doesn't already exist on
-// the filesystem.
-func downloadUpdateVersion(exeDir string, updateUrl string, version string, permissions fs.FileMode) (string, error) {
-
-	// TODO maybe handle file name collisions though they're extremely unlikely.
-	updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
-	updateFile, err := os.Open(updateFilePath)
-	alreadyExists := err == nil
-
-	if alreadyExists {
-		defer updateFile.Close()
-	}
-
-	resp, err := http.Get(fmt.Sprintf("%s/v1.0/downloads/%s?version=%s", updateUrl, Pokemon, version))
-
-	if err != nil {
-		return "", err
-	}
-
-	// Validate the file if it has already been downloaded.
-	if alreadyExists {
-
-		sha512, err := common.Sha512Hash(updateFile)
-
-		if err != nil {
-			return "", err
-		}
-
-		expectedSha512 := resp.Header.Get(common.Sha512Name)
-
-		if expectedSha512 != sha512 {
-			return "", common.NewSha512Error(updateFilePath, expectedSha512, sha512)
-		}
-
-		// Update file already exists.
-		return updateFilePath, nil
-	}
-
-	defer resp.Body.Close()
-
-	// Download to a temp file to attempt an atomic move on Unix systems.
-	// The temp file should be created in the same dir that the target file
-	// exists in. This prevents the file from being moved across
-	// filesystems.
-	updateFileTempPath := filepath.Join(exeDir, fmt.Sprintf(".%s-%s.%d.tmp", Pokemon, version, time.Now().UnixNano()))
-	if updateFile, err = os.OpenFile(updateFileTempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, permissions); err != nil {
-		return "", err
-	}
-
-	defer os.Remove(updateFileTempPath)
-
-	defer updateFile.Close()
-
-	hasher := sha512.New()
-
-	if _, err = io.Copy(io.MultiWriter(hasher, updateFile), resp.Body); err != nil {
-		return "", err
-	}
-
-	sha512 := common.ToHexHash(&hasher)
-	expectedSha512 := resp.Header.Get(common.Sha512Name)
-
-	if expectedSha512 != sha512 {
-		return "", common.NewSha512Error(updateFilePath, expectedSha512, sha512)
-	}
-
-	if err = updateFile.Sync(); err != nil {
-		return "", err
-	}
-
-	// Attempt atomic move.
-	if err = os.Rename(updateFileTempPath, updateFilePath); err != nil {
-		return "", err
-	}
-
-	return updateFilePath, nil
-}
-
 func main() {
 
 	// Validate that the tool was built with the correct flags:
@@ -185,35 +79,37 @@ func main() {
 
 	for i := 0; i < len(AvailablePokemon); i += 1 {
 		AvailablePokemon[i] = strings.ToLower(strings.TrimSpace(AvailablePokemon[i]))
+
+		if AvailablePokemon[i] == "" {
+			panic(fmt.Sprintf("AvailablePokemon at %d was blank.", i))
+		}
+	}
+
+	if len(AvailablePokemon) == 0 {
+		panic("No AvailablePokemon found.")
 	}
 
 	// Get the current executable, its metadata, and its parent:
 	exe, err := os.Executable()
 
 	if err != nil {
-		panic(fmt.Sprintf("Error getting current executable dir: %v", err))
+		panic(fmt.Sprintf("Error getting current executable dir:\n%v", err))
 	}
 
 	exe, err = filepath.Abs(exe)
 
 	if err != nil {
-		panic(fmt.Sprintf("Error getting current executable dir: %v", err))
+		panic(fmt.Sprintf("Error getting current executable dir:\n%v", err))
 	}
 
 	exeDir := filepath.Dir(exe)
 	exeStat, err := os.Stat(exe)
 
 	if err != nil {
-		panic(fmt.Sprintf("Error getting current executable permissions: %v", err))
+		panic(fmt.Sprintf("Error getting current executable permissions:\n%v", err))
 	}
 
 	exePermissions := exeStat.Mode().Perm()
-
-	isPosix := common.IsPosix()
-	switch runtime.GOOS {
-	case "linux", "darwin", "freebsd", "netbsd", "openbsd", "solaris":
-		isPosix = true
-	}
 
 	helpFlag := common.CliFlag{
 		Name:        "--help",
@@ -320,75 +216,19 @@ func main() {
 		}
 	}
 
-	// Updates the CLI by:
-	// 1. Downloading and verifying the latest version.
-	// 2. Starting the new version.
-	// 3. Shutting down the current version.
-	update := func() {
+	if strings.ToUpper(os.Getenv(PokemonCli)) != "TRUE" {
 
-		fmt.Printf("Checking for updates...\n")
+		// If the updater completely fails for some bizarre reason, we fall
+		// back to simply running the command directly without any update
+		// functionality. Barring errors, the update loop method should not
+		// exit.
+		err = updateLoop(exe, exeDir, exePermissions, daemonRun, Version, UpdateUrl, updateCheckIntervalSecs)
 
-		// TODO configure limits on versions to update.
-		version, err := getLatestVersion(UpdateUrl)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed determine versions available for updates: %v\n", err)
+		if err == nil {
 			return
 		}
 
-		if version == Version {
-			fmt.Printf("%s is the already latest version.\n", version)
-			return
-		}
-
-		updateFilePath, err := downloadUpdateVersion(exeDir, UpdateUrl, version, exePermissions)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to download update file: %v\n", err)
-			return
-		}
-
-		err = os.Setenv(PokemonCliUpdatedName, "TRUE")
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to set up env for update: %v\n", err)
-			return
-		}
-
-		if isPosix {
-
-			// On Posix, reuse the existing process via exec for a seamless upgrade
-			// that keeps the existing PID.
-			//
-			// If the CLI ever needs to clean up resources, we may need to force
-			// forking another process instead.
-			err = syscall.Exec(updateFilePath, newArgs(os.Args, updateFilePath), os.Environ())
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to start updated version: %v\n", err)
-			} else {
-				// This line should never be hit as exec exits abruptly.
-				os.Exit(0)
-			}
-		}
-
-		cmd := exec.Command(updateFilePath, newArgs(os.Args, updateFilePath)...)
-		err = cmd.Start()
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to start updated version: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "Started updated version: %s. Shutting down: %s.\n", version, Version)
-			os.Exit(0)
-		}
-	}
-
-	if os.Getenv(PokemonCliUpdatedName) == "TRUE" {
-		// Skip update if we already know we just updated.
-		_ = os.Unsetenv(PokemonCliUpdatedName)
-		fmt.Printf("Successfully updated to %s\n", Version)
-	} else {
-		update()
+		fmt.Fprintf(os.Stderr, "Failed to use updateable version:\n%v\nFalling back to non-updatable execution.\n", err)
 	}
 
 	// Update before validating pokemon in case the update supports a new
@@ -402,19 +242,16 @@ func main() {
 		os.Exit(64)
 	}
 
-	// Background thread to update versions. This thread may be killed at any
-	// time, so don't expect any defer calls the complete. This should not be
-	// used for writing external data to the filesystem.
-	go func() {
-		for {
-			time.Sleep(time.Duration(updateCheckIntervalSecs) * time.Second)
-
-			update()
-		}
-	}()
+	var stdin []byte = make([]byte, 0, 1)
 
 	// Print greeting:
 	for {
+
+		// Listen for shutdown request and exit if you recieve it.
+		if read, err := os.Stdin.Read(stdin); err != nil && read > 0 && stdin[0] > 0 {
+			os.Exit(0)
+		}
+
 		if randomPokemon {
 			pokemon = AvailablePokemon[rand.Intn(len(AvailablePokemon))]
 		}
@@ -427,4 +264,284 @@ func main() {
 			time.Sleep(time.Duration(daemonIntervalSecs) * time.Second)
 		}
 	}
+}
+
+type Cmd struct {
+	Version string
+	Path    string
+	Cmd     *exec.Cmd
+	Stdin   io.WriteCloser
+}
+
+func kill(cmd *exec.Cmd) {
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Process.Release()
+	}
+}
+
+// Infinite loop that updates the CLI by:
+// 1. Finding the latest version.
+// 2. Downloading and verifying the latest version.
+// 3. Shutting down the previous version.
+// 4. Starting the new version.
+// This function will also attempt to fall back to previous working versions if
+// there are problems.
+func updateLoop(exe string, exeDir string, exePermissions fs.FileMode, isDaemon bool, initialVersion string, updateUrl string, updateCheckIntervalSecs uint64) error {
+
+	// Propagate this value to child processes.
+	err := os.Setenv(PokemonCli, "TRUE")
+
+	if err != nil {
+		return fmt.Errorf("update failed to set %s", PokemonCli)
+	}
+
+	var prevCmd Cmd
+	var currentCmd Cmd
+	updateFilePath := ""
+
+	first := true
+
+	for {
+
+		// If this is a non-daemon process, it should execute and exit immediately.
+		if !isDaemon && currentCmd.Cmd != nil {
+			err = currentCmd.Cmd.Wait()
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to wait for child process:\n%v\n", err)
+				kill(currentCmd.Cmd)
+				os.Exit(1)
+			}
+
+			time.Sleep(time.Duration(SHORT_TIMEOUT_SECS) * time.Second)
+			os.Exit(currentCmd.Cmd.ProcessState.ExitCode())
+		}
+
+		if first {
+			first = false
+		} else {
+			time.Sleep(time.Duration(updateCheckIntervalSecs) * time.Second)
+		}
+
+		fmt.Printf("Checking for updates...\n")
+
+		// TODO configure limits on versions to update.
+		version, err := getLatestVersion(updateUrl)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed determine versions available for updates:\n%v\n", err)
+		} else if currentCmd.Version == version {
+			fmt.Printf("%s is the already latest version.\n", version)
+			continue
+		}
+
+		// TODO handle name collisions.
+		updateFilePath, err = downloadUpdateVersion(exeDir, updateUrl, version, exePermissions)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to download update file:\n%v\n", err)
+		} else {
+			var newCmd Cmd
+			newCmd, err = upgradeChildProcess(currentCmd, updateFilePath, version)
+
+			if err == nil {
+				prevCmd = currentCmd
+				currentCmd = newCmd
+				fmt.Printf("Successfully updated to version %s.\n", version)
+				continue
+			}
+
+			fmt.Fprintf(os.Stderr, "Failed to start process \"%s\":\n%v\n", updateFilePath, err)
+		}
+
+		// Attempt to fall back to the last known working version.
+		if prevCmd.Path != "" && prevCmd.Path != updateFilePath {
+			fmt.Fprintf(os.Stderr, "Falling back to \"%s\".\n", prevCmd.Version)
+
+			currentCmd, err = upgradeChildProcess(currentCmd, prevCmd.Path, prevCmd.Version)
+
+			if err == nil {
+				fmt.Printf("Successfully reverted to \"%s\".", prevCmd.Version)
+				continue
+			}
+
+			fmt.Fprintf(os.Stderr, "Failed to start process \"%s\":\n%v\n", prevCmd.Path, err)
+		}
+
+		// Fall back to the current version since we at least know it was installed.
+		fmt.Fprintf(os.Stderr, "Falling back to \"%s\".\n", initialVersion)
+
+		currentCmd, err = upgradeChildProcess(currentCmd, exe, initialVersion)
+
+		if err != nil {
+			return fmt.Errorf("failed to use default version")
+		}
+	}
+}
+
+// Gets the latest available version from the server.
+func getLatestVersion(updateUrl string) (string, error) {
+
+	resp, err := http.Get(fmt.Sprintf("%s/v1.0/versions/%s", updateUrl, Pokemon))
+
+	if err != nil {
+		return "", err
+	}
+
+	defer resp.Body.Close()
+
+	var versions common.Versions
+
+	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil || len(versions.All) == 0 {
+		return "", err
+	}
+
+	return versions.All[len(versions.All)-1], nil
+}
+
+// Downloads the specified version of the tool if it doesn't already exist on
+// the filesystem.
+func downloadUpdateVersion(exeDir string, updateUrl string, version string, permissions fs.FileMode) (string, error) {
+
+	if version == "" {
+		return "", fmt.Errorf("version was empty")
+	}
+
+	// TODO maybe handle file name collisions with the temp files though
+	// they're extremely unlikely.
+	updateFilePath := filepath.Join(exeDir, fmt.Sprintf("%s-%s", Pokemon, version))
+	updateFile, err := os.Open(updateFilePath)
+	alreadyExists := err == nil
+
+	if alreadyExists {
+		defer updateFile.Close()
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/v1.0/downloads/%s?version=%s", updateUrl, Pokemon, version))
+
+	if err != nil {
+		return "", err
+	}
+
+	// Validate the file if it has already been downloaded.
+	if alreadyExists {
+
+		sha512, err := common.Sha512Hash(updateFile)
+
+		if err != nil {
+			return "", err
+		}
+
+		expectedSha512 := resp.Header.Get(common.Sha512Name)
+
+		if expectedSha512 != sha512 {
+			return "", common.NewSha512Error(updateFilePath, expectedSha512, sha512)
+		}
+
+		// Update file already exists.
+		return updateFilePath, nil
+	}
+
+	defer resp.Body.Close()
+
+	// Download to a temp file to attempt an atomic move on Unix systems.
+	// The temp file should be created in the same dir that the target file
+	// exists in. This prevents the file from being moved across
+	// filesystems.
+	updateFileTempPath := filepath.Join(exeDir, fmt.Sprintf(".%s-%s.%d.tmp", Pokemon, version, time.Now().UnixNano()))
+	if updateFile, err = os.OpenFile(updateFileTempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, permissions); err != nil {
+		return "", err
+	}
+
+	defer os.Remove(updateFileTempPath)
+
+	defer updateFile.Close()
+
+	hasher := sha512.New()
+
+	if _, err = io.Copy(io.MultiWriter(hasher, updateFile), resp.Body); err != nil {
+		return "", err
+	}
+
+	sha512 := common.ToHexHash(&hasher)
+	expectedSha512 := resp.Header.Get(common.Sha512Name)
+
+	if expectedSha512 != sha512 {
+		return "", common.NewSha512Error(updateFilePath, expectedSha512, sha512)
+	}
+
+	if err = updateFile.Sync(); err != nil {
+		return "", err
+	}
+
+	// Attempt atomic move.
+	if err = os.Rename(updateFileTempPath, updateFilePath); err != nil {
+		return "", err
+	}
+
+	return updateFilePath, nil
+}
+
+// Stops the previous child process and starts the current one.
+func upgradeChildProcess(previousChild Cmd, updateFilePath string, version string) (Cmd, error) {
+
+	if previousChild != (Cmd{}) {
+
+		// Attempt to gracefully shutdown the previous process.
+		var err error
+
+		for range 3 {
+
+			var wrote int
+			wrote, err = previousChild.Stdin.Write(shutdownSignal)
+
+			if err != nil {
+				break
+			} else if wrote > 0 {
+				break
+			}
+
+			// Retry when no bytes written.
+		}
+
+		if err == nil {
+			time.Sleep(time.Duration(SHORT_TIMEOUT_SECS) * time.Second)
+		}
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to shutdown process gracefully:\n%v\n", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "Shutting down %s.\n", previousChild.Version)
+
+		// If the previous process hasn't already shut down, force it to shut
+		// down.
+		kill(previousChild.Cmd)
+	}
+
+	// Create the new process.
+	cmd := exec.Command(updateFilePath, os.Args[1:]...)
+
+	stdin, err := cmd.StdinPipe()
+
+	if err != nil {
+		return Cmd{}, err
+	}
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err = cmd.Start()
+
+	if err != nil {
+		return Cmd{}, err
+	}
+
+	return Cmd{
+		Version: version,
+		Path:    updateFilePath,
+		Cmd:     cmd,
+		Stdin:   stdin,
+	}, nil
 }

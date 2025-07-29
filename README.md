@@ -18,8 +18,8 @@ The example contains:
 
     The CLI tool will auto-update on startup, and if run in daemon mode, will
     check for updates on an interval. If an update is found, the tool will
-    download it, restart the process using the updated version, and shut down
-    the original process.
+    download it, stop the old version (child process), and start the new
+    version (child process).
 * A server that serves the versions of the CLI tool via HTTP(S). The server will 
     automatically find new versions of the CLI tool on the disk and make them
     available.
